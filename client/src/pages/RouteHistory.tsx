@@ -77,8 +77,24 @@ export default function RouteHistory() {
       {/* History list */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
         {isLoading && (
-          <div className="flex items-center justify-center h-32">
-            <div className="text-sm font-mono text-primary neon-pulse">LOADING HISTORY...</div>
+          <div className="space-y-2">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="cyber-card p-4 animate-pulse">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 flex-1">
+                    <div className="w-10 h-10 rounded bg-secondary shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3.5 bg-secondary rounded w-1/2" />
+                      <div className="h-2.5 bg-secondary rounded w-1/3" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="h-6 bg-secondary rounded w-16" />
+                    <div className="h-6 bg-secondary rounded w-14" />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

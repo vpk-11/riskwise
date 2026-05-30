@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import {
   getRiskTextClass,
@@ -8,8 +9,9 @@ import {
   getRiskColor,
 } from "@/lib/riskUtils";
 import { cn } from "@/lib/utils";
-import { Send, Terminal, Cpu, Route, BarChart3, Clock, DollarSign, AlertTriangle } from "lucide-react";
+import { Send, Terminal, Cpu, Route, BarChart3, Clock, DollarSign, AlertTriangle, Map } from "lucide-react";
 import { toast } from "sonner";
+import { useRouteMap } from "@/contexts/RouteMapContext";
 
 interface AgentMessage {
   agent: "ATHENA" | "HERMES" | "APOLLO" | "SYSTEM";
@@ -23,6 +25,7 @@ type EvaluationResult = {
   breakdown: { weather: number; labor: number; geopolitical: number; congestion: number };
   baseTransitDays: number;
   riskNarrative: string;
+  baseRouteWaypoints?: [number, number][];
   alternativeRoutes: {
     name: string;
     transitDays: number;
@@ -64,6 +67,11 @@ export default function RouteAnalyzer() {
   const [isRunning, setIsRunning] = useState(false);
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [, navigate] = useLocation();
+  const { setAltRouteOverlay, setBaseRouteOverlay } = useRouteMap();
+
+  const [evalledOrigin, setEvalledOrigin] = useState("");
+  const [evalledDestination, setEvalledDestination] = useState("");
 
   const evaluateMutation = trpc.routes.evaluate.useMutation();
 
@@ -111,6 +119,8 @@ export default function RouteAnalyzer() {
     setIsRunning(true);
     setResult(null);
     setAgentLog([]);
+    setEvalledOrigin(evalOrigin);
+    setEvalledDestination(evalDestination);
 
     addLog("SYSTEM", `Initializing RiskWise multi-agent evaluation...`, "done");
     addLog("SYSTEM", `Route: ${evalOrigin} → ${evalDestination}`, "done");
@@ -159,6 +169,14 @@ export default function RouteAnalyzer() {
       addLog("SYSTEM", "Evaluation complete. Results ready.", "done");
 
       setResult(evalResult as EvaluationResult);
+
+      // Store base route for map visualization
+      setBaseRouteOverlay({
+        originPort: evalledOrigin,
+        destinationPort: evalledDestination,
+        riskScore: score,
+        waypoints: (evalResult as EvaluationResult).baseRouteWaypoints,
+      });
 
       if (score > 75) {
         toast.error(`🚨 CRITICAL RISK: Score ${score}/100 — Owner notified`, {
@@ -456,21 +474,48 @@ export default function RouteAnalyzer() {
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
                     Apollo Alternative Routes ({result.alternativeRoutes.length})
                   </span>
+                  <span className="ml-auto text-[9px] font-mono text-muted-foreground/50 tracking-wider">
+                    CLICK ROUTE TO VIEW ON MAP
+                  </span>
                 </div>
                 <div className="space-y-3">
                   {result.alternativeRoutes.map((alt, i) => (
-                    <div
+                    <button
                       key={i}
+                      onClick={() => {
+                        setAltRouteOverlay({
+                          name: alt.name,
+                          riskScore: alt.riskScore,
+                          waypoints: alt.waypoints ?? [],
+                          originPort: evalledOrigin || "port of shanghai",
+                          destinationPort: evalledDestination || "port of rotterdam",
+                        });
+                        navigate("/map");
+                        toast.success(`Viewing "${alt.name}" on map`, { duration: 3000 });
+                      }}
                       className={cn(
-                        "p-3 rounded-sm border",
+                        "w-full text-left p-3 rounded-sm border transition-all duration-200 group",
                         getRiskBorderClass(alt.riskScore),
-                        "bg-secondary/30"
+                        "bg-secondary/30 hover:bg-secondary/60 active:scale-[0.99]"
                       )}
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="font-mono text-sm font-bold text-foreground">{alt.name}</div>
-                        <div className={cn("text-sm font-display font-bold shrink-0", getRiskTextClass(alt.riskScore))}>
-                          {alt.riskScore}/100
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className={cn("text-sm font-display font-bold", getRiskTextClass(alt.riskScore))}>
+                            {alt.riskScore}/100
+                          </div>
+                          <div
+                            className="flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                            style={{
+                              color: getRiskColor(alt.riskScore),
+                              background: `${getRiskColor(alt.riskScore)}18`,
+                              border: `1px solid ${getRiskColor(alt.riskScore)}40`,
+                            }}
+                          >
+                            <Map className="w-3 h-3" />
+                            VIEW
+                          </div>
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground font-mono mb-2">{alt.description}</p>
@@ -484,7 +529,7 @@ export default function RouteAnalyzer() {
                           {alt.costImpact}
                         </span>
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="mt-3 pt-3 border-t border-border/50">

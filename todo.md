@@ -70,3 +70,9 @@
 ## Deployment Prep
 - [x] Register hourly heartbeat job on server startup (idempotent)
 - [x] Save checkpoint
+
+## UI Fixes (Round 2)
+- [x] Fix map contrast — use a lighter dark map style so geography is clearly visible post-publish
+- [x] Fix dark-mode info windows — white box/invisible close button on disruption/route markers
+- [x] Add loading indicators — show users when services/agents are loading
+- [x] Alternate route visualization — clicking an alternate route in Route Analyzer shows it on the map with color coding

@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import RiskWiseLayout from "./components/RiskWiseLayout";
+import { RouteMapProvider } from "./contexts/RouteMapContext";
 import MapView from "./pages/MapView";
 import RouteAnalyzer from "./pages/RouteAnalyzer";
 import ActiveDisruptions from "./pages/ActiveDisruptions";
@@ -30,20 +31,22 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
-        <TooltipProvider>
-          <Toaster
-            theme="dark"
-            toastOptions={{
-              style: {
-                background: "oklch(0.11 0.015 240)",
-                border: "1px solid oklch(0.72 0.22 195 / 0.3)",
-                color: "oklch(0.92 0.02 200)",
-                fontFamily: "var(--font-mono)",
-              },
-            }}
-          />
-          <Router />
-        </TooltipProvider>
+        <RouteMapProvider>
+          <TooltipProvider>
+            <Toaster
+              theme="dark"
+              toastOptions={{
+                style: {
+                  background: "oklch(0.11 0.015 240)",
+                  border: "1px solid oklch(0.72 0.22 195 / 0.3)",
+                  color: "oklch(0.92 0.02 200)",
+                  fontFamily: "var(--font-mono)",
+                },
+              }}
+            />
+            <Router />
+          </TooltipProvider>
+        </RouteMapProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
