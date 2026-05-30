@@ -86,9 +86,16 @@ declare global {
   }
 }
 
-// Use our server-side proxy so the request always carries the correct Origin header.
-// The server reads x-forwarded-host from the Manus gateway and forwards it to Forge.
-const MAPS_SCRIPT_URL = `/api/maps/js?v=weekly&libraries=marker,places,geocoding,geometry`;
+// Load Google Maps directly from the Forge proxy using frontend Vite env vars.
+// import.meta.env.VITE_* vars are baked into the bundle at build time and always
+// available in the browser. The browser sends the correct Origin header automatically.
+// This avoids the server-side proxy which cannot access VITE_FRONTEND_FORGE_API_KEY
+// in the production Cloud Run environment (only BUILT_IN_* keys are injected there).
+const _forgeBase = import.meta.env.VITE_FRONTEND_FORGE_API_URL ?? "";
+const _forgeKey = import.meta.env.VITE_FRONTEND_FORGE_API_KEY ?? "";
+const MAPS_SCRIPT_URL = _forgeBase && _forgeKey
+  ? `${_forgeBase}/v1/maps/proxy/maps/api/js?key=${_forgeKey}&v=weekly&libraries=marker,places,geocoding,geometry`
+  : `/api/maps/js?v=weekly&libraries=marker,places,geocoding,geometry`; // fallback to server proxy
 
 let _mapScriptPromise: Promise<boolean> | null = null;
 
