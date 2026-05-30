@@ -86,11 +86,9 @@ declare global {
   }
 }
 
-const API_KEY = import.meta.env.VITE_FRONTEND_FORGE_API_KEY;
-const FORGE_BASE_URL =
-  import.meta.env.VITE_FRONTEND_FORGE_API_URL ||
-  "https://forge.butterfly-effect.dev";
-const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
+// Use our server-side proxy so the request always carries the correct Origin header.
+// The server reads x-forwarded-host from the Manus gateway and forwards it to Forge.
+const MAPS_SCRIPT_URL = `/api/maps/js?v=weekly&libraries=marker,places,geocoding,geometry`;
 
 let _mapScriptPromise: Promise<boolean> | null = null;
 
@@ -102,7 +100,7 @@ function loadMapScript(): Promise<boolean> {
   }
   _mapScriptPromise = new Promise<boolean>((resolve) => {
     const script = document.createElement("script");
-    script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry`;
+    script.src = MAPS_SCRIPT_URL;
     script.async = true;
     script.defer = true;
     script.onload = () => {
@@ -111,7 +109,7 @@ function loadMapScript(): Promise<boolean> {
       const check = () => {
         if (window.google?.maps?.Map) {
           resolve(true);
-        } else if (attempts++ < 20) {
+        } else if (attempts++ < 30) {
           setTimeout(check, 200);
         } else {
           console.error("Google Maps API did not initialize in time");
