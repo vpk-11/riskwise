@@ -84,3 +84,7 @@
 - [x] Expand Route History cards to show full riskNarrative, intelligenceSummary, and dataSources on expansion
 - [x] Store riskNarrative, intelligenceSummary, dataSources in route_evaluations DB table
 - [x] Integrate real-time data: GDELT RSS feeds, NASA EONET weather, USGS seismic into Athena pipeline
+
+## UI Fixes (Round 4)
+- [x] Fix Google Maps proxy on published domain — switched to VITE_FRONTEND_FORGE_API_KEY (correct key for maps proxy)
+- [x] Add risk trend sparkline chart to Route History cards (AreaChart with color-coded line, trend direction badge, reference lines at 30 and 60)

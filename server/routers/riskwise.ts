@@ -8,6 +8,7 @@ import {
   insertRouteEvaluation,
   getEvaluationById,
   getAllShippingRoutes,
+  getRouteTrend,
 } from "../db";
 import { orchestrate } from "../agents";
 
@@ -111,6 +112,12 @@ export const routesRouter = router({
   allRoutes: publicProcedure.query(async () => {
     return getAllShippingRoutes();
   }),
+
+  trend: publicProcedure
+    .input(z.object({ originPort: z.string(), destinationPort: z.string() }))
+    .query(async ({ input }) => {
+      return getRouteTrend(input.originPort, input.destinationPort, 10);
+    }),
 });
 
 // ── Events Router ─────────────────────────────────────────────────────────────

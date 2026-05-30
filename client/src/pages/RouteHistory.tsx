@@ -8,8 +8,111 @@ import {
   getRiskColor,
 } from "@/lib/riskUtils";
 import { cn } from "@/lib/utils";
-import { History, RefreshCw, ChevronDown, ChevronUp, Route, Clock, AlertTriangle, BarChart3, FileText, Cpu, Database, Globe, Zap } from "lucide-react";
+import { History, RefreshCw, ChevronDown, ChevronUp, Route, Clock, AlertTriangle, BarChart3, TrendingUp, TrendingDown, Minus, Cpu, Database, Globe, Zap } from "lucide-react";
 import { toast } from "sonner";
+import {
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+  Area,
+  AreaChart,
+} from "recharts";
+
+// ── Sparkline component ────────────────────────────────────────────────────────
+function RouteTrendSparkline({ originPort, destinationPort }: { originPort: string; destinationPort: string }) {
+  const { data: trend, isLoading } = trpc.routes.trend.useQuery(
+    { originPort, destinationPort },
+    { staleTime: 30000 }
+  );
+
+  if (isLoading) {
+    return (
+      <div className="h-16 flex items-center justify-center">
+        <div className="text-[10px] font-mono text-muted-foreground/40">Loading trend...</div>
+      </div>
+    );
+  }
+
+  if (!trend || trend.length < 2) {
+    return (
+      <div className="h-16 flex items-center justify-center">
+        <div className="text-[10px] font-mono text-muted-foreground/40">Not enough data for trend (need 2+ evaluations)</div>
+      </div>
+    );
+  }
+
+  // Determine trend direction
+  const first = trend[0]?.overallRiskScore ?? 0;
+  const last = trend[trend.length - 1]?.overallRiskScore ?? 0;
+  const delta = last - first;
+  const TrendIcon = delta > 5 ? TrendingUp : delta < -5 ? TrendingDown : Minus;
+  const trendColor = delta > 5 ? "oklch(0.60_0.28_15)" : delta < -5 ? "oklch(0.75_0.20_145)" : "oklch(0.72_0.22_195)";
+  const trendLabel = delta > 5 ? `+${delta} WORSENING` : delta < -5 ? `${delta} IMPROVING` : "STABLE";
+
+  const chartData = trend.map((t, i) => ({
+    index: i + 1,
+    score: t.overallRiskScore,
+    date: new Date(t.evaluatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+  }));
+
+  // Pick line color based on latest score
+  const lineColor = getRiskColor(last);
+
+  return (
+    <div className="border border-border/60 rounded-sm p-3 bg-secondary/20">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          <BarChart3 className="w-3.5 h-3.5 text-muted-foreground" />
+          <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Risk Trend</span>
+          <span className="text-[9px] font-mono text-muted-foreground/50">{trend.length} evaluations</span>
+        </div>
+        <div className="flex items-center gap-1" style={{ color: trendColor }}>
+          <TrendIcon className="w-3 h-3" />
+          <span className="text-[10px] font-mono font-bold">{trendLabel}</span>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={64}>
+        <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+          <defs>
+            <linearGradient id={`sparkGrad-${originPort}-${destinationPort}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={lineColor} stopOpacity={0.3} />
+              <stop offset="95%" stopColor={lineColor} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="date" tick={{ fontSize: 8, fill: "oklch(0.55 0.04 220)", fontFamily: "monospace" }} tickLine={false} axisLine={false} />
+          <YAxis domain={[0, 100]} tick={{ fontSize: 8, fill: "oklch(0.55 0.04 220)", fontFamily: "monospace" }} tickLine={false} axisLine={false} ticks={[0, 30, 60, 100]} />
+          <ReferenceLine y={30} stroke="oklch(0.75 0.20 145)" strokeDasharray="2 2" strokeOpacity={0.3} />
+          <ReferenceLine y={60} stroke="oklch(0.60 0.28 15)" strokeDasharray="2 2" strokeOpacity={0.3} />
+          <Tooltip
+            contentStyle={{
+              background: "oklch(0.12 0.02 220)",
+              border: "1px solid oklch(0.25 0.04 220)",
+              borderRadius: "2px",
+              fontSize: "10px",
+              fontFamily: "monospace",
+              color: "oklch(0.85 0.04 220)",
+              padding: "4px 8px",
+            }}
+            formatter={(value: number) => [value, "Risk Score"]}
+            labelStyle={{ color: "oklch(0.55 0.04 220)" }}
+          />
+          <Area
+            type="monotone"
+            dataKey="score"
+            stroke={lineColor}
+            strokeWidth={1.5}
+            fill={`url(#sparkGrad-${originPort}-${destinationPort})`}
+            dot={{ fill: lineColor, r: 2, strokeWidth: 0 }}
+            activeDot={{ r: 3, fill: lineColor, strokeWidth: 0 }}
+            style={{ filter: `drop-shadow(0 0 3px ${lineColor})` }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 export default function RouteHistory() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -228,6 +331,12 @@ export default function RouteHistory() {
                       </div>
                     </div>
                   )}
+
+                  {/* Risk Trend Sparkline */}
+                  <RouteTrendSparkline
+                    originPort={evaluation.originPort}
+                    destinationPort={evaluation.destinationPort}
+                  />
 
                   {/* Alternative routes */}
                   {altRoutes && altRoutes.length > 0 && (

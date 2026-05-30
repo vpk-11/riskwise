@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { eq, and, asc, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser,
@@ -119,6 +119,26 @@ export async function getRouteHistory(limit = 20) {
     .select()
     .from(routeEvaluations)
     .orderBy(desc(routeEvaluations.evaluatedAt))
+    .limit(limit);
+}
+
+export async function getRouteTrend(originPort: string, destinationPort: string, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: routeEvaluations.id,
+      overallRiskScore: routeEvaluations.overallRiskScore,
+      evaluatedAt: routeEvaluations.evaluatedAt,
+    })
+    .from(routeEvaluations)
+    .where(
+      and(
+        eq(routeEvaluations.originPort, originPort),
+        eq(routeEvaluations.destinationPort, destinationPort)
+      )
+    )
+    .orderBy(asc(routeEvaluations.evaluatedAt))
     .limit(limit);
 }
 
