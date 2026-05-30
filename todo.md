@@ -76,3 +76,11 @@
 - [x] Fix dark-mode info windows — white box/invisible close button on disruption/route markers
 - [x] Add loading indicators — show users when services/agents are loading
 - [x] Alternate route visualization — clicking an alternate route in Route Analyzer shows it on the map with color coding
+
+## UI Fixes (Round 3)
+- [x] Remove alternate route map visualization feature (context, buttons, legend, MapView drawing code)
+- [x] Add data freshness indicators — show when Athena last scanned and how old each disruption event is
+- [x] Add data accuracy/source transparency — show agent confidence notes and data source labels
+- [x] Expand Route History cards to show full riskNarrative, intelligenceSummary, and dataSources on expansion
+- [x] Store riskNarrative, intelligenceSummary, dataSources in route_evaluations DB table
+- [x] Integrate real-time data: GDELT RSS feeds, NASA EONET weather, USGS seismic into Athena pipeline

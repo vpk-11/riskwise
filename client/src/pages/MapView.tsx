@@ -1,7 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { MapView as GoogleMapView } from "@/components/Map";
-import { useRouteMap } from "@/contexts/RouteMapContext";
-import type { BaseRouteOverlay } from "@/contexts/RouteMapContext";
 import { trpc } from "@/lib/trpc";
 import { getRiskColor, getSeverityColor, getCategoryIcon } from "@/lib/riskUtils";
 import { AlertTriangle, Layers, Eye, EyeOff, RefreshCw, Loader2 } from "lucide-react";
@@ -126,16 +124,6 @@ function injectInfoWindowStyles() {
   document.head.appendChild(style);
 }
 
-// ── Alternate route overlay type ─────────────────────────────────────────────
-
-export interface AltRouteOverlay {
-  name: string;
-  riskScore: number;
-  waypoints: [number, number][];
-  originPort: string;
-  destinationPort: string;
-}
-
 // ── Map styles — Material-inspired dark with good contrast ───────────────────
 
 const DARK_MAP_STYLES: google.maps.MapTypeStyle[] = [
@@ -182,13 +170,10 @@ const DARK_MAP_STYLES: google.maps.MapTypeStyle[] = [
 export default function MapView() {
   const mapRef = useRef<google.maps.Map | null>(null);
   const baseOverlaysRef = useRef<(google.maps.Polyline | google.maps.Circle | google.maps.Marker)[]>([]);
-  const altOverlaysRef = useRef<(google.maps.Polyline | google.maps.Marker)[]>([]);
   const [showRoutes, setShowRoutes] = useState(true);
   const [showDisruptions, setShowDisruptions] = useState(true);
   const [mapLoadFailed, setMapLoadFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-
-  const { altRouteOverlay, baseRouteOverlay } = useRouteMap();
 
   const { data: disruptions, isLoading: disruptionsLoading, refetch } = trpc.events.active.useQuery(undefined, {
     refetchInterval: 60000,
@@ -201,11 +186,6 @@ export default function MapView() {
   const clearBaseOverlays = useCallback(() => {
     baseOverlaysRef.current.forEach((o) => o.setMap(null));
     baseOverlaysRef.current = [];
-  }, []);
-
-  const clearAltOverlays = useCallback(() => {
-    altOverlaysRef.current.forEach((o) => o.setMap(null));
-    altOverlaysRef.current = [];
   }, []);
 
   const drawBaseOverlays = useCallback(
@@ -337,167 +317,6 @@ export default function MapView() {
     [disruptions, routes, history, clearBaseOverlays]
   );
 
-  // Draw alternate route overlay when prop changes
-  const drawAltOverlay = useCallback(
-    (map: google.maps.Map, alt: AltRouteOverlay | null | undefined, base?: BaseRouteOverlay | null) => {
-      clearAltOverlays();
-      if (!alt) return;
-
-      // ── Draw the BASE (evaluated) route first as a dimmer reference line ──
-      if (base) {
-        const baseColor = getRiskColor(base.riskScore);
-        const baseOrigin = PORT_COORDS[base.originPort.toLowerCase()];
-        const baseDest = PORT_COORDS[base.destinationPort.toLowerCase()];
-        let basePath: google.maps.LatLngLiteral[] = [];
-        if (base.waypoints && base.waypoints.length > 1) {
-          basePath = base.waypoints.map(([lng, lat]) => ({ lat, lng }));
-        } else if (baseOrigin && baseDest) {
-          basePath = [baseOrigin, baseDest];
-        }
-        if (basePath.length >= 2) {
-          const baseLine = new window.google.maps.Polyline({
-            path: basePath,
-            geodesic: true,
-            strokeColor: baseColor,
-            strokeOpacity: 0.45,
-            strokeWeight: 3,
-            map,
-          });
-          altOverlaysRef.current.push(baseLine);
-          // Label marker at midpoint
-          const midIdx = Math.floor(basePath.length / 2);
-          const midPt = basePath[midIdx];
-          const baseLabel = new window.google.maps.Marker({
-            position: midPt,
-            map,
-            title: `Base Route (${base.riskScore}/100)`,
-            icon: {
-              path: window.google.maps.SymbolPath.CIRCLE,
-              scale: 0,
-              fillOpacity: 0,
-              strokeOpacity: 0,
-              strokeWeight: 0,
-            },
-            label: {
-              text: `BASE ${base.riskScore}/100`,
-              color: baseColor,
-              fontSize: "10px",
-              fontFamily: "'Share Tech Mono', monospace",
-              fontWeight: "700",
-            },
-            zIndex: 5,
-          });
-          altOverlaysRef.current.push(baseLabel as unknown as google.maps.Polyline);
-        }
-      }
-
-      const color = getRiskColor(alt.riskScore);
-
-      // Try to resolve origin/destination coords
-      const originCoord = PORT_COORDS[alt.originPort.toLowerCase()];
-      const destCoord = PORT_COORDS[alt.destinationPort.toLowerCase()];
-
-      // Build path: use provided waypoints if available, else straight line
-      let path: google.maps.LatLngLiteral[] = [];
-      if (alt.waypoints && alt.waypoints.length > 1) {
-        path = alt.waypoints.map(([lng, lat]) => ({ lat, lng }));
-      } else if (originCoord && destCoord) {
-        // Generate a curved intermediate path
-        const midLat = (originCoord.lat + destCoord.lat) / 2;
-        const midLng = (originCoord.lng + destCoord.lng) / 2;
-        // Offset slightly to distinguish from base route
-        const offset = 8;
-        path = [
-          originCoord,
-          { lat: midLat + offset, lng: midLng },
-          destCoord,
-        ];
-      }
-
-      if (path.length < 2) return;
-
-      // Dashed outline for alternate route
-      const outlineLine = new window.google.maps.Polyline({
-        path,
-        geodesic: true,
-        strokeColor: "#ffffff",
-        strokeOpacity: 0.15,
-        strokeWeight: 6,
-        map,
-      });
-      altOverlaysRef.current.push(outlineLine);
-
-      // Main colored line
-      const mainLine = new window.google.maps.Polyline({
-        path,
-        geodesic: true,
-        strokeColor: color,
-        strokeOpacity: 0.9,
-        strokeWeight: 3,
-        icons: [
-          {
-            icon: {
-              path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-              scale: 3,
-              fillColor: color,
-              fillOpacity: 1,
-              strokeColor: color,
-              strokeWeight: 1,
-            },
-            offset: "50%",
-            repeat: "120px",
-          },
-        ],
-        map,
-      });
-      altOverlaysRef.current.push(mainLine);
-
-      // Origin marker
-      if (originCoord) {
-        const originMarker = new window.google.maps.Marker({
-          position: originCoord,
-          map,
-          title: alt.originPort,
-          icon: {
-            path: window.google.maps.SymbolPath.CIRCLE,
-            scale: 9,
-            fillColor: color,
-            fillOpacity: 1,
-            strokeColor: "#ffffff",
-            strokeWeight: 2,
-          },
-          zIndex: 10,
-        });
-        altOverlaysRef.current.push(originMarker as unknown as google.maps.Polyline);
-      }
-
-      // Destination marker
-      if (destCoord) {
-        const destMarker = new window.google.maps.Marker({
-          position: destCoord,
-          map,
-          title: alt.destinationPort,
-          icon: {
-            path: window.google.maps.SymbolPath.CIRCLE,
-            scale: 9,
-            fillColor: color,
-            fillOpacity: 1,
-            strokeColor: "#ffffff",
-            strokeWeight: 2,
-          },
-          zIndex: 10,
-        });
-        altOverlaysRef.current.push(destMarker as unknown as google.maps.Polyline);
-      }
-
-      // Fit map to the route
-      const bounds = new window.google.maps.LatLngBounds();
-      path.forEach((p) => bounds.extend(p));
-      map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-    },
-    [clearAltOverlays]
-  );
-
   const handleMapReady = useCallback(
     (map: google.maps.Map) => {
       if (!map) {
@@ -519,13 +338,6 @@ export default function MapView() {
       drawBaseOverlays(mapRef.current, showRoutes, showDisruptions);
     }
   }, [disruptions, routes, history, showRoutes, showDisruptions, mapReady, drawBaseOverlays]);
-
-  // Draw/clear alt route when prop changes (also pass base route for side-by-side comparison)
-  useEffect(() => {
-    if (mapRef.current && mapReady) {
-      drawAltOverlay(mapRef.current, altRouteOverlay, baseRouteOverlay);
-    }
-  }, [altRouteOverlay, baseRouteOverlay, mapReady, drawAltOverlay]);
 
   // Detect map load failure after timeout
   useEffect(() => {
@@ -580,42 +392,6 @@ export default function MapView() {
         <div className="absolute top-4 left-4 cyber-card px-3 py-2 z-10 flex items-center gap-2">
           <Loader2 className="w-3 h-3 text-primary animate-spin" />
           <span className="text-xs font-mono text-primary">ATHENA SCANNING...</span>
-        </div>
-      )}
-
-      {/* Alt route comparison legend */}
-      {altRouteOverlay && (
-        <div
-          className="absolute top-4 left-4 cyber-card px-4 py-3 z-10 space-y-2 min-w-[220px]"
-          style={{ borderColor: `${getRiskColor(altRouteOverlay.riskScore)}55` }}
-        >
-          <div className="text-[9px] font-mono text-muted-foreground tracking-widest uppercase mb-1">Route Comparison</div>
-          {/* Base route row */}
-          {baseRouteOverlay && (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 shrink-0">
-                <div className="w-6 h-0.5" style={{ background: getRiskColor(baseRouteOverlay.riskScore), opacity: 0.5 }} />
-              </div>
-              <span className="text-[10px] font-mono text-muted-foreground flex-1 truncate">
-                BASE: {baseRouteOverlay.originPort.split(" ").slice(-1)[0]} → {baseRouteOverlay.destinationPort.split(" ").slice(-1)[0]}
-              </span>
-              <span className="text-[10px] font-mono font-bold shrink-0" style={{ color: getRiskColor(baseRouteOverlay.riskScore) }}>
-                {baseRouteOverlay.riskScore}
-              </span>
-            </div>
-          )}
-          {/* Alt route row */}
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 shrink-0">
-              <div className="w-6 h-0.5" style={{ background: getRiskColor(altRouteOverlay.riskScore) }} />
-              <div className="w-1.5 h-1.5 rounded-full" style={{ background: getRiskColor(altRouteOverlay.riskScore), boxShadow: `0 0 4px ${getRiskColor(altRouteOverlay.riskScore)}` }} />
-            </div>
-            <span className="text-[10px] font-mono text-foreground flex-1 truncate">{altRouteOverlay.name}</span>
-            <span className="text-[10px] font-mono font-bold shrink-0" style={{ color: getRiskColor(altRouteOverlay.riskScore) }}>
-              {altRouteOverlay.riskScore}
-            </span>
-          </div>
-
         </div>
       )}
 

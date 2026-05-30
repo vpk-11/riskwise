@@ -44,6 +44,9 @@ export const routesRouter = router({
         breakdown: result.breakdown,
         baseTransitDays: result.baseTransitDays,
         alternativeRoutes: result.alternativeRoutes,
+        riskNarrative: result.riskNarrative,
+        intelligenceSummary: result.intelligenceSummary,
+        dataSources: result.dataSources,
         queryText: input.queryText ?? null,
       });
 
@@ -89,6 +92,9 @@ export const routesRouter = router({
         breakdown: result.breakdown,
         baseTransitDays: result.baseTransitDays,
         alternativeRoutes: result.alternativeRoutes,
+        riskNarrative: result.riskNarrative,
+        intelligenceSummary: result.intelligenceSummary,
+        dataSources: result.dataSources,
         queryText: `Re-run of evaluation #${input.evaluationId}`,
       });
 

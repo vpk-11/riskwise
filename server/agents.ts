@@ -8,6 +8,7 @@
  */
 
 import { invokeLLM } from "./_core/llm";
+import { fetchAllRealTimeIntelligence, type LiveRiskEvent } from "./realtime";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,8 @@ export interface OrchestrationResult {
   breakdown: RiskBreakdown;
   baseTransitDays: number;
   riskNarrative: string;
+  intelligenceSummary: string;
+  dataSources: { name: string; count: number; ok: boolean }[];
   alternativeRoutes: AlternativeRoute[];
   recommendation: string;
   baseRouteWaypoints: [number, number][];
@@ -69,8 +72,35 @@ export async function runAthena(
   destination: string,
   activeDisruptions: { title: string; category: string; severity: string; affectedLocations: string[]; description: string }[]
 ): Promise<AthenaResult> {
-  const disruptionContext = activeDisruptions
-    .map((d) => `- [${d.severity}] ${d.title} (${d.category}): affects ${d.affectedLocations.join(", ")}`)
+  // Fetch real-time intelligence from live sources (RSS, NASA EONET, USGS, Country Risk)
+  let liveEvents: LiveRiskEvent[] = [];
+  let liveSourceSummary = "";
+  try {
+    const liveData = await fetchAllRealTimeIntelligence();
+    liveEvents = liveData.events;
+    const successfulSources = liveData.sources.filter((s) => s.ok).map((s) => `${s.name} (${s.count} events)`);
+    liveSourceSummary = successfulSources.length > 0
+      ? `Live intelligence fetched from: ${successfulSources.join(", ")} as of ${liveData.fetchedAt}`
+      : "Live intelligence sources unavailable — using database events only.";
+    console.log(`[Athena] Live data: ${liveEvents.length} events from ${successfulSources.length} sources`);
+  } catch (e) {
+    console.warn("[Athena] Real-time fetch failed, falling back to DB events:", e);
+  }
+
+  // Merge live events with DB events (live events take priority)
+  const mergedDisruptions = [
+    ...liveEvents.map((e) => ({
+      title: e.title,
+      category: e.category,
+      severity: e.severity,
+      affectedLocations: e.affectedLocations,
+      description: `[${e.sourceProvider}] ${e.description}`,
+    })),
+    ...activeDisruptions.slice(0, 10), // Keep up to 10 DB events as supplementary context
+  ].slice(0, 30); // Cap total context at 30 events
+
+  const disruptionContext = mergedDisruptions
+    .map((d) => `- [${d.severity}] ${d.title} (${d.category}): affects ${d.affectedLocations.join(", ")}\n  ${d.description.slice(0, 200)}`)
     .join("\n");
 
   const response = await invokeLLM({
@@ -83,10 +113,12 @@ export async function runAthena(
         role: "user",
         content: `Analyze the shipping route from ${origin} to ${destination}.
 
-Current active global disruptions:
-${disruptionContext}
+${liveSourceSummary}
 
-Identify which disruptions are relevant to this route and provide an intelligence summary. Consider the typical geographic path between these ports.
+Current active global disruptions (merged from live sources + database):
+${disruptionContext || "No disruptions currently in the database."}
+
+Identify which disruptions are relevant to this route and provide an intelligence summary. Consider the typical geographic path between these ports. Note which events come from live news sources vs. database records.
 
 Respond with JSON in this exact format:
 {
@@ -311,7 +343,13 @@ export async function orchestrate(
   destination: string,
   activeDisruptions: { title: string; category: string; severity: string; affectedLocations: string[]; description: string }[]
 ): Promise<OrchestrationResult> {
-  // Step 1: Athena researches relevant disruptions
+  // Step 1: Athena researches relevant disruptions (with live data)
+  let liveDataSources: { name: string; count: number; ok: boolean }[] = [];
+  try {
+    const { fetchAllRealTimeIntelligence } = await import("./realtime");
+    const liveData = await fetchAllRealTimeIntelligence();
+    liveDataSources = liveData.sources;
+  } catch {}
   const athenaResult = await runAthena(origin, destination, activeDisruptions);
 
   // Step 2: Hermes calculates risk score
@@ -337,6 +375,8 @@ export async function orchestrate(
     },
     baseTransitDays: hermesResult.baseTransitDays,
     riskNarrative: hermesResult.riskNarrative,
+    intelligenceSummary: athenaResult.intelligenceSummary,
+    dataSources: liveDataSources,
     alternativeRoutes: apolloResult.alternativeRoutes,
     recommendation: apolloResult.recommendation,
     baseRouteWaypoints,
@@ -345,6 +385,11 @@ export async function orchestrate(
 
 // ── Athena Background Scan ────────────────────────────────────────────────────
 
+/**
+ * Athena Background Scan — now uses real-time data from live sources.
+ * Fetches live events first; if available, picks the most critical one to persist.
+ * Falls back to LLM-generated synthetic event if all live sources fail.
+ */
 export async function runAthenaScan(): Promise<{
   title: string;
   description: string;
@@ -352,6 +397,26 @@ export async function runAthenaScan(): Promise<{
   severity: "Low" | "Medium" | "High" | "Critical";
   affectedLocations: string[];
 }> {
+  // Try live sources first
+  try {
+    const liveData = await fetchAllRealTimeIntelligence();
+    if (liveData.events.length > 0) {
+      // Pick the highest-severity event that isn't already a country-risk entry
+      const candidate = liveData.events.find((e) => e.sourceProvider !== "Osiris Country Risk Index") ?? liveData.events[0];
+      console.log(`[Athena Scan] Using live event from ${candidate.sourceProvider}: ${candidate.title}`);
+      return {
+        title: candidate.title,
+        description: `[Live — ${candidate.sourceProvider}] ${candidate.description}`,
+        category: candidate.category,
+        severity: candidate.severity,
+        affectedLocations: candidate.affectedLocations,
+      };
+    }
+  } catch (e) {
+    console.warn("[Athena Scan] Live fetch failed, falling back to LLM generation:", e);
+  }
+
+  // Fallback: LLM-generated synthetic event
   const response = await invokeLLM({
     messages: [
       {

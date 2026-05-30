@@ -63,6 +63,9 @@ export const routeEvaluations = mysqlTable("route_evaluations", {
   breakdown: json("breakdown").notNull(), // { weather: n, labor: n, geopolitical: n, congestion: n }
   baseTransitDays: int("baseTransitDays").notNull(),
   alternativeRoutes: json("alternativeRoutes"), // [{name, transitDays, riskScore, waypoints, costImpact}]
+  riskNarrative: text("riskNarrative"), // full agent narrative from Hermes
+  intelligenceSummary: text("intelligenceSummary"), // Athena's intelligence summary
+  dataSources: json("dataSources"), // [{name, count, ok}] provenance
   queryText: text("queryText"), // original NL query if from terminal
   evaluatedAt: timestamp("evaluatedAt").defaultNow().notNull(),
 });

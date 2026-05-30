@@ -2,7 +2,26 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { getSeverityTextClass, getSeverityColor, getCategoryIcon, getCategoryColor } from "@/lib/riskUtils";
 import { cn } from "@/lib/utils";
-import { AlertTriangle, Filter, RefreshCw, MapPin, ExternalLink } from "lucide-react";
+import { AlertTriangle, Filter, RefreshCw, MapPin, ExternalLink, Clock } from "lucide-react";
+
+function getEventAge(createdAt: Date | string): string {
+  const now = Date.now();
+  const created = new Date(createdAt).getTime();
+  const diffMs = now - created;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
+}
+
+function getAgeColor(createdAt: Date | string): string {
+  const diffHours = (Date.now() - new Date(createdAt).getTime()) / 3600000;
+  if (diffHours < 1) return "oklch(0.75 0.20 145)"; // fresh green
+  if (diffHours < 24) return "oklch(0.80 0.20 75)"; // amber
+  return "oklch(0.55 0.04 220)"; // stale grey
+}
 
 type Category = "Weather" | "Strike" | "Geopolitical" | "Port Congestion";
 type Severity = "Low" | "Medium" | "High" | "Critical";
@@ -222,10 +241,17 @@ export default function ActiveDisruptions() {
                     </div>
                   </div>
                 </div>
-                <div className="text-[10px] font-mono text-muted-foreground/60 shrink-0 text-right">
-                  {new Date(event.createdAt).toLocaleDateString()}
-                  <br />
-                  {new Date(event.createdAt).toLocaleTimeString()}
+                <div className="text-right shrink-0 space-y-1">
+                  <div
+                    className="flex items-center gap-1 justify-end text-[10px] font-mono font-bold"
+                    style={{ color: getAgeColor(event.createdAt) }}
+                  >
+                    <Clock className="w-2.5 h-2.5" />
+                    {getEventAge(event.createdAt)}
+                  </div>
+                  <div className="text-[9px] font-mono text-muted-foreground/40">
+                    {new Date(event.createdAt).toLocaleDateString()}
+                  </div>
                 </div>
               </div>
 

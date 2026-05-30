@@ -9,9 +9,8 @@ import {
   getRiskColor,
 } from "@/lib/riskUtils";
 import { cn } from "@/lib/utils";
-import { Send, Terminal, Cpu, Route, BarChart3, Clock, DollarSign, AlertTriangle, Map } from "lucide-react";
+import { Send, Terminal, Cpu, Route, BarChart3, Clock, DollarSign, AlertTriangle, Globe, Database, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { useRouteMap } from "@/contexts/RouteMapContext";
 
 interface AgentMessage {
   agent: "ATHENA" | "HERMES" | "APOLLO" | "SYSTEM";
@@ -25,7 +24,8 @@ type EvaluationResult = {
   breakdown: { weather: number; labor: number; geopolitical: number; congestion: number };
   baseTransitDays: number;
   riskNarrative: string;
-  baseRouteWaypoints?: [number, number][];
+  intelligenceSummary?: string;
+  dataSources?: { name: string; count: number; ok: boolean }[];
   alternativeRoutes: {
     name: string;
     transitDays: number;
@@ -68,7 +68,6 @@ export default function RouteAnalyzer() {
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [, navigate] = useLocation();
-  const { setAltRouteOverlay, setBaseRouteOverlay } = useRouteMap();
 
   const [evalledOrigin, setEvalledOrigin] = useState("");
   const [evalledDestination, setEvalledDestination] = useState("");
@@ -169,14 +168,6 @@ export default function RouteAnalyzer() {
       addLog("SYSTEM", "Evaluation complete. Results ready.", "done");
 
       setResult(evalResult as EvaluationResult);
-
-      // Store base route for map visualization
-      setBaseRouteOverlay({
-        originPort: evalledOrigin,
-        destinationPort: evalledDestination,
-        riskScore: score,
-        waypoints: (evalResult as EvaluationResult).baseRouteWaypoints,
-      });
 
       if (score > 75) {
         toast.error(`🚨 CRITICAL RISK: Score ${score}/100 — Owner notified`, {
@@ -462,9 +453,49 @@ export default function RouteAnalyzer() {
 
             {/* Risk Narrative */}
             <div className="cyber-card p-4">
-              <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-2">Intelligence Narrative</div>
-              <p className="text-sm text-foreground/80 leading-relaxed font-mono">{result.riskNarrative}</p>
+              <div className="flex items-center gap-1.5 mb-2">
+                <Cpu className="w-3.5 h-3.5 text-[oklch(0.72_0.22_195)]" />
+                <span className="text-[10px] font-mono text-[oklch(0.72_0.22_195)] uppercase tracking-wider">Hermes Risk Analysis</span>
+              </div>
+              <p className="text-sm text-foreground/80 leading-relaxed font-mono whitespace-pre-wrap">{result.riskNarrative}</p>
             </div>
+
+            {/* Intelligence Summary */}
+            {result.intelligenceSummary && (
+              <div className="cyber-card p-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <Globe className="w-3.5 h-3.5 text-[oklch(0.80_0.20_75)]" />
+                  <span className="text-[10px] font-mono text-[oklch(0.80_0.20_75)] uppercase tracking-wider">Athena Intelligence Summary</span>
+                </div>
+                <p className="text-sm text-foreground/80 leading-relaxed font-mono whitespace-pre-wrap">{result.intelligenceSummary}</p>
+              </div>
+            )}
+
+            {/* Data Sources */}
+            {result.dataSources && result.dataSources.length > 0 && (
+              <div className="cyber-card p-4">
+                <div className="flex items-center gap-1.5 mb-3">
+                  <Database className="w-3.5 h-3.5 text-muted-foreground" />
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Live Data Sources</span>
+                  <span className="ml-auto text-[9px] font-mono text-muted-foreground/50">REAL-TIME INTELLIGENCE</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 mb-3">
+                  {result.dataSources.map((src, i) => (
+                    <div key={i} className="flex items-center gap-2 text-[10px] font-mono">
+                      <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", src.ok ? "bg-[oklch(0.75_0.20_145)]" : "bg-[oklch(0.60_0.25_25)]")} />
+                      <span className="text-foreground/70 flex-1 truncate">{src.name}</span>
+                      <span className="text-muted-foreground/60">{src.count} event{src.count !== 1 ? "s" : ""}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-start gap-1.5 pt-2 border-t border-border/40">
+                  <Zap className="w-3 h-3 text-muted-foreground/40 shrink-0 mt-0.5" />
+                  <span className="text-[9px] font-mono text-muted-foreground/40 leading-relaxed">
+                    Risk scores are LLM-synthesized from live RSS feeds, NASA EONET weather events, and USGS seismic data. Accuracy is heuristic — validate critical routing decisions with official maritime advisories.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Alternative Routes */}
             {result.alternativeRoutes.length > 0 && (
@@ -475,7 +506,7 @@ export default function RouteAnalyzer() {
                     Apollo Alternative Routes ({result.alternativeRoutes.length})
                   </span>
                   <span className="ml-auto text-[9px] font-mono text-muted-foreground/50 tracking-wider">
-                    CLICK ROUTE TO VIEW ON MAP
+                    APOLLO ALTERNATIVES
                   </span>
                 </div>
                 <div className="space-y-3">
@@ -483,15 +514,7 @@ export default function RouteAnalyzer() {
                     <button
                       key={i}
                       onClick={() => {
-                        setAltRouteOverlay({
-                          name: alt.name,
-                          riskScore: alt.riskScore,
-                          waypoints: alt.waypoints ?? [],
-                          originPort: evalledOrigin || "port of shanghai",
-                          destinationPort: evalledDestination || "port of rotterdam",
-                        });
-                        navigate("/map");
-                        toast.success(`Viewing "${alt.name}" on map`, { duration: 3000 });
+                        toast.info(`Route: ${alt.name} — Risk ${alt.riskScore}/100`, { duration: 3000 });
                       }}
                       className={cn(
                         "w-full text-left p-3 rounded-sm border transition-all duration-200 group",
@@ -513,8 +536,7 @@ export default function RouteAnalyzer() {
                               border: `1px solid ${getRiskColor(alt.riskScore)}40`,
                             }}
                           >
-                            <Map className="w-3 h-3" />
-                            VIEW
+                            VIEW DETAILS
                           </div>
                         </div>
                       </div>

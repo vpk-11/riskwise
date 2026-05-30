@@ -5,7 +5,6 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import RiskWiseLayout from "./components/RiskWiseLayout";
-import { RouteMapProvider } from "./contexts/RouteMapContext";
 import MapView from "./pages/MapView";
 import RouteAnalyzer from "./pages/RouteAnalyzer";
 import ActiveDisruptions from "./pages/ActiveDisruptions";
@@ -31,8 +30,7 @@ function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="dark">
-        <RouteMapProvider>
-          <TooltipProvider>
+        <TooltipProvider>
             <Toaster
               theme="dark"
               toastOptions={{
@@ -46,7 +44,6 @@ function App() {
             />
             <Router />
           </TooltipProvider>
-        </RouteMapProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
