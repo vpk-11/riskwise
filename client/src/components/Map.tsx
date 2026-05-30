@@ -92,21 +92,42 @@ const FORGE_BASE_URL =
   "https://forge.butterfly-effect.dev";
 const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
 
-function loadMapScript() {
-  return new Promise(resolve => {
+let _mapScriptPromise: Promise<boolean> | null = null;
+
+function loadMapScript(): Promise<boolean> {
+  if (_mapScriptPromise) return _mapScriptPromise;
+  // Already loaded
+  if (typeof window !== "undefined" && window.google?.maps?.Map) {
+    return Promise.resolve(true);
+  }
+  _mapScriptPromise = new Promise<boolean>((resolve) => {
     const script = document.createElement("script");
     script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry`;
     script.async = true;
-    script.crossOrigin = "anonymous";
+    script.defer = true;
     script.onload = () => {
-      resolve(null);
-      script.remove(); // Clean up immediately
+      // Poll until google.maps.Map is available
+      let attempts = 0;
+      const check = () => {
+        if (window.google?.maps?.Map) {
+          resolve(true);
+        } else if (attempts++ < 20) {
+          setTimeout(check, 200);
+        } else {
+          console.error("Google Maps API did not initialize in time");
+          resolve(false);
+        }
+      };
+      check();
     };
     script.onerror = () => {
       console.error("Failed to load Google Maps script");
+      _mapScriptPromise = null;
+      resolve(false);
     };
     document.head.appendChild(script);
   });
+  return _mapScriptPromise;
 }
 
 interface MapViewProps {
@@ -126,7 +147,11 @@ export function MapView({
   const map = useRef<google.maps.Map | null>(null);
 
   const init = usePersistFn(async () => {
-    await loadMapScript();
+    const loaded = await loadMapScript();
+    if (!loaded || !window.google?.maps?.Map) {
+      console.error("Google Maps failed to load");
+      return;
+    }
     if (!mapContainer.current) {
       console.error("Map container not found");
       return;
@@ -134,11 +159,10 @@ export function MapView({
     map.current = new window.google.maps.Map(mapContainer.current, {
       zoom: initialZoom,
       center: initialCenter,
-      mapTypeControl: true,
+      mapTypeControl: false,
       fullscreenControl: true,
       zoomControl: true,
-      streetViewControl: true,
-      mapId: "DEMO_MAP_ID",
+      streetViewControl: false,
     });
     if (onMapReady) {
       onMapReady(map.current);
