@@ -86,16 +86,14 @@ declare global {
   }
 }
 
-// Load Google Maps directly from the Forge proxy using frontend Vite env vars.
-// import.meta.env.VITE_* vars are baked into the bundle at build time and always
-// available in the browser. The browser sends the correct Origin header automatically.
-// This avoids the server-side proxy which cannot access VITE_FRONTEND_FORGE_API_KEY
-// in the production Cloud Run environment (only BUILT_IN_* keys are injected there).
+// Load Google Maps via fetch() + Blob URL so the browser sends the correct Origin header.
+// <script src> tags do NOT send Origin headers, causing the Forge proxy to reject them.
+// fetch() always sends Origin, so the proxy can validate the request domain.
 const _forgeBase = import.meta.env.VITE_FRONTEND_FORGE_API_URL ?? "";
 const _forgeKey = import.meta.env.VITE_FRONTEND_FORGE_API_KEY ?? "";
-const MAPS_SCRIPT_URL = _forgeBase && _forgeKey
+const MAPS_FETCH_URL = _forgeBase && _forgeKey
   ? `${_forgeBase}/v1/maps/proxy/maps/api/js?key=${_forgeKey}&v=weekly&libraries=marker,places,geocoding,geometry`
-  : `/api/maps/js?v=weekly&libraries=marker,places,geocoding,geometry`; // fallback to server proxy
+  : null;
 
 let _mapScriptPromise: Promise<boolean> | null = null;
 
@@ -105,32 +103,59 @@ function loadMapScript(): Promise<boolean> {
   if (typeof window !== "undefined" && window.google?.maps?.Map) {
     return Promise.resolve(true);
   }
+
   _mapScriptPromise = new Promise<boolean>((resolve) => {
-    const script = document.createElement("script");
-    script.src = MAPS_SCRIPT_URL;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      // Poll until google.maps.Map is available
-      let attempts = 0;
-      const check = () => {
-        if (window.google?.maps?.Map) {
-          resolve(true);
-        } else if (attempts++ < 30) {
-          setTimeout(check, 200);
-        } else {
-          console.error("Google Maps API did not initialize in time");
-          resolve(false);
-        }
-      };
-      check();
-    };
-    script.onerror = () => {
+    if (!MAPS_FETCH_URL) {
       console.error("Failed to load Google Maps script");
-      _mapScriptPromise = null;
       resolve(false);
-    };
-    document.head.appendChild(script);
+      return;
+    }
+
+    // Use fetch() so the browser sends the correct Origin header to the Forge proxy.
+    // <script src> tags do NOT send Origin, causing 401. fetch() always sends Origin.
+    fetch(MAPS_FETCH_URL)
+      .then(async (res) => {
+        if (!res.ok) {
+          console.error(`Failed to load Google Maps script (HTTP ${res.status})`);
+          _mapScriptPromise = null;
+          resolve(false);
+          return;
+        }
+        const jsText = await res.text();
+        // Inject via Blob URL so the JS executes in the page context
+        const blob = new Blob([jsText], { type: "application/javascript" });
+        const blobUrl = URL.createObjectURL(blob);
+        const script = document.createElement("script");
+        script.src = blobUrl;
+        script.onload = () => {
+          URL.revokeObjectURL(blobUrl);
+          // Poll until google.maps.Map is available
+          let attempts = 0;
+          const check = () => {
+            if (window.google?.maps?.Map) {
+              resolve(true);
+            } else if (attempts++ < 30) {
+              setTimeout(check, 200);
+            } else {
+              console.error("Google Maps API did not initialize in time");
+              resolve(false);
+            }
+          };
+          check();
+        };
+        script.onerror = () => {
+          URL.revokeObjectURL(blobUrl);
+          console.error("Failed to load Google Maps script");
+          _mapScriptPromise = null;
+          resolve(false);
+        };
+        document.head.appendChild(script);
+      })
+      .catch((err) => {
+        console.error("Failed to load Google Maps script", err);
+        _mapScriptPromise = null;
+        resolve(false);
+      });
   });
   return _mapScriptPromise;
 }
