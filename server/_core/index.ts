@@ -118,6 +118,20 @@ async function startServer() {
     athenaHourlyScan().catch((err) => logger.error({ err }, "Athena cron failed"));
   });
   logger.info("Athena hourly scan scheduled (every hour at :00)");
+
+  // Seed on startup so the DB isn't empty on first boot
+  setTimeout(() => {
+    athenaHourlyScan().catch((err) => logger.warn({ err }, "Athena startup scan failed"));
+  }, 3000);
+
+  // Dev-only: manual trigger endpoint
+  if (!ENV.isProduction) {
+    app.post("/api/dev/trigger-athena", (_req, res) => {
+      athenaHourlyScan()
+        .then(() => res.json({ ok: true }))
+        .catch((err) => res.status(500).json({ error: String(err) }));
+    });
+  }
 }
 
 startServer().catch((err) => {
