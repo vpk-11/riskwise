@@ -153,22 +153,6 @@
     border-color: oklch(0.65 0.25 25 / 0.5);
   }
 
-  /* Scanline overlay effect */
-  .scanlines::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      oklch(0 0 0 / 0.03) 2px,
-      oklch(0 0 0 / 0.03) 4px
-    );
-    pointer-events: none;
-    z-index: 1;
-  }
-
   /* Cyberpunk card */
   .cyber-card {
     @apply bg-card border border-border rounded-sm relative overflow-hidden;
@@ -191,11 +175,6 @@
   }
   .neon-pulse {
     animation: neon-pulse 2s ease-in-out infinite;
-  }
-
-  @keyframes scan-line {
-    0% { transform: translateY(-100%); }
-    100% { transform: translateY(100vh); }
   }
 
   /* Terminal cursor blink */

@@ -47,7 +47,7 @@ export default function ActiveDisruptions() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-border shrink-0">
+      <div className="px-6 py-5 border-b border-border shrink-0">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-[oklch(0.65_0.25_25)]" />
@@ -169,11 +169,11 @@ export default function ActiveDisruptions() {
       </div>
 
       {/* Events list */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+      <div className="flex-1 overflow-y-auto p-5 space-y-3 min-h-0">
         {isLoading && (
           <div className="space-y-3">
             {[...Array(4)].map((_, i) => (
-              <div key={i} className="cyber-card p-4 animate-pulse">
+              <div key={i} className="cyber-card p-5 animate-pulse">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="flex items-start gap-2 flex-1">
                     <div className="w-5 h-5 rounded bg-secondary shrink-0" />
@@ -215,7 +215,7 @@ export default function ActiveDisruptions() {
           return (
             <div
               key={event.id}
-              className="cyber-card p-4 transition-all hover:border-border/80"
+              className="cyber-card p-5 transition-all hover:border-border/80"
               style={{
                 borderLeftWidth: "3px",
                 borderLeftColor: severityColor,

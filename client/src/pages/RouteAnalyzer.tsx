@@ -209,7 +209,7 @@ export default function RouteAnalyzer() {
           <Terminal className="w-4 h-4 text-primary" />
           <span className="font-display text-sm font-bold text-primary tracking-wider">QUERY TERMINAL</span>
           <div className="ml-auto flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-[oklch(0.65_0.25_25)] neon-pulse" />
+            <div className="w-2 h-2 rounded-full bg-[oklch(0.65_0.25_25)]" />
             <div className="w-2 h-2 rounded-full bg-[oklch(0.80_0.20_75)]" />
             <div className="w-2 h-2 rounded-full bg-[oklch(0.75_0.20_145)]" />
           </div>
@@ -389,7 +389,7 @@ export default function RouteAnalyzer() {
 
             {/* Metrics Row */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="cyber-card p-4">
+              <div className="cyber-card p-5">
                 <div className="flex items-center gap-2 mb-2">
                   <Clock className="w-4 h-4 text-primary" />
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Base Transit</span>
@@ -405,7 +405,7 @@ export default function RouteAnalyzer() {
                 )}
               </div>
 
-              <div className="cyber-card p-4">
+              <div className="cyber-card p-5">
                 <div className="flex items-center gap-2 mb-2">
                   <DollarSign className="w-4 h-4 text-[oklch(0.80_0.20_75)]" />
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Cost Impact</span>
@@ -424,7 +424,7 @@ export default function RouteAnalyzer() {
             </div>
 
             {/* Risk Breakdown */}
-            <div className="cyber-card p-4">
+            <div className="cyber-card p-5">
               <div className="flex items-center gap-2 mb-4">
                 <BarChart3 className="w-4 h-4 text-primary" />
                 <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Risk Breakdown</span>
@@ -452,28 +452,28 @@ export default function RouteAnalyzer() {
             </div>
 
             {/* Risk Narrative */}
-            <div className="cyber-card p-4">
+            <div className="cyber-card p-5">
               <div className="flex items-center gap-1.5 mb-2">
                 <Cpu className="w-3.5 h-3.5 text-[oklch(0.72_0.22_195)]" />
                 <span className="text-[10px] font-mono text-[oklch(0.72_0.22_195)] uppercase tracking-wider">Hermes Risk Analysis</span>
               </div>
-              <p className="text-sm text-foreground/80 leading-relaxed font-mono whitespace-pre-wrap">{result.riskNarrative}</p>
+              <p className="text-sm text-foreground/80 leading-relaxed">{result.riskNarrative}</p>
             </div>
 
             {/* Intelligence Summary */}
             {result.intelligenceSummary && (
-              <div className="cyber-card p-4">
+              <div className="cyber-card p-5">
                 <div className="flex items-center gap-1.5 mb-2">
                   <Globe className="w-3.5 h-3.5 text-[oklch(0.80_0.20_75)]" />
                   <span className="text-[10px] font-mono text-[oklch(0.80_0.20_75)] uppercase tracking-wider">Athena Intelligence Summary</span>
                 </div>
-                <p className="text-sm text-foreground/80 leading-relaxed font-mono whitespace-pre-wrap">{result.intelligenceSummary}</p>
+                <p className="text-sm text-foreground/80 leading-relaxed">{result.intelligenceSummary}</p>
               </div>
             )}
 
             {/* Data Sources */}
             {result.dataSources && result.dataSources.length > 0 && (
-              <div className="cyber-card p-4">
+              <div className="cyber-card p-5">
                 <div className="flex items-center gap-1.5 mb-3">
                   <Database className="w-3.5 h-3.5 text-muted-foreground" />
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Live Data Sources</span>
@@ -499,7 +499,7 @@ export default function RouteAnalyzer() {
 
             {/* Alternative Routes */}
             {result.alternativeRoutes.length > 0 && (
-              <div className="cyber-card p-4">
+              <div className="cyber-card p-5">
                 <div className="flex items-center gap-2 mb-4">
                   <Route className="w-4 h-4 text-[oklch(0.75_0.20_145)]" />
                   <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
