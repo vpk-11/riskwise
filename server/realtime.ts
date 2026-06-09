@@ -10,6 +10,10 @@
  * All functions are server-side only and return normalised RiskWise event objects.
  */
 
+import { createLogger } from "./_core/logger";
+
+const log = createLogger("realtime");
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface LiveRiskEvent {
@@ -211,7 +215,7 @@ async function fetchRssOsint(): Promise<{ events: LiveRiskEvent[]; count: number
         ok = true;
       }
     } catch (e) {
-      console.warn(`[RiskWise Realtime] RSS fetch failed for ${feed.source}:`, e instanceof Error ? e.message : e);
+      log.warn({ err: e instanceof Error ? e.message : e, source: feed.source }, `RSS fetch failed for ${feed.source}`);
     }
   }
 
@@ -281,7 +285,7 @@ async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: numbe
 
     return { events, count: events.length, ok: true };
   } catch (e) {
-    console.warn("[RiskWise Realtime] NASA EONET fetch failed:", e instanceof Error ? e.message : e);
+    log.warn({ err: e instanceof Error ? e.message : e }, "NASA EONET fetch failed");
     return { events, count: 0, ok: false };
   }
 }
@@ -333,7 +337,7 @@ async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count:
 
     return { events, count: events.length, ok: true };
   } catch (e) {
-    console.warn("[RiskWise Realtime] USGS fetch failed:", e instanceof Error ? e.message : e);
+    log.warn({ err: e instanceof Error ? e.message : e }, "USGS fetch failed");
     return { events, count: 0, ok: false };
   }
 }

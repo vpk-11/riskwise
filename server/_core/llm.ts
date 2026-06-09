@@ -209,14 +209,25 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  `${ENV.RISKWISE_LLM_BASE_URL.replace(/\/$/, "")}/chat/completions`;
-
-const assertApiKey = () => {
-  if (!ENV.RISKWISE_LLM_API_KEY) {
-    throw new Error("RISKWISE_LLM_API_KEY is not configured");
-  }
+export type LLMConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
 };
+
+const resolveApiUrl = (config?: LLMConfig) => {
+  const base = config?.baseUrl ?? ENV.RISKWISE_LLM_BASE_URL;
+  return `${base.replace(/\/$/, "")}/chat/completions`;
+};
+
+const resolveApiKey = (config?: LLMConfig) => {
+  const key = config?.apiKey ?? ENV.RISKWISE_LLM_API_KEY;
+  if (!key) throw new Error("LLM API key not configured");
+  return key;
+};
+
+const resolveModel = (config?: LLMConfig) =>
+  config?.model ?? ENV.RISKWISE_LLM_MODEL;
 
 const normalizeResponseFormat = ({
   responseFormat,
@@ -263,8 +274,14 @@ const normalizeResponseFormat = ({
   };
 };
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+export type InvokeResponse = InvokeResult & {
+  _latencyMs: number;
+  _model: string;
+};
+
+export async function invokeLLM(params: InvokeParams, config?: LLMConfig): Promise<InvokeResponse> {
+  const apiKey = resolveApiKey(config);
+  const model = resolveModel(config);
 
   const {
     messages,
@@ -278,7 +295,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } = params;
 
   const payload: Record<string, unknown> = {
-    model: ENV.RISKWISE_LLM_MODEL,
+    model,
     messages: messages.map(normalizeMessage),
   };
 
@@ -305,14 +322,17 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.response_format = normalizedResponseFormat;
   }
 
-  const response = await fetch(resolveApiUrl(), {
+  const start = Date.now();
+  const response = await fetch(resolveApiUrl(config), {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ENV.RISKWISE_LLM_API_KEY}`,
+      authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(payload),
   });
+
+  const latencyMs = Date.now() - start;
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -321,5 +341,6 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     );
   }
 
-  return (await response.json()) as InvokeResult;
+  const result = (await response.json()) as InvokeResult;
+  return { ...result, _latencyMs: latencyMs, _model: model };
 }

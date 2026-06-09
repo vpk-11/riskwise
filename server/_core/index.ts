@@ -55,35 +55,7 @@ async function startServer() {
     next();
   });
 
-  // Google Maps proxy — keeps API key server-side
-  app.get("/api/maps/js", async (req, res) => {
-    const key = ENV.GOOGLE_MAPS_API_KEY;
-    if (!key) {
-      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-      res.send(`console.warn('[RiskWise] GOOGLE_MAPS_API_KEY not configured — maps disabled');`);
-      return;
-    }
-    const libraries = (req.query.libraries as string) || "marker,places,geocoding,geometry";
-    const v = (req.query.v as string) || "weekly";
-    const url = `https://maps.googleapis.com/maps/api/js?key=${key}&v=${v}&libraries=${libraries}`;
-    try {
-      const upstream = await fetch(url);
-      if (!upstream.ok) {
-        logger.warn({ status: upstream.status }, "Maps API upstream error");
-        res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-        res.send(`console.error('[RiskWise] Maps API error ${upstream.status}');`);
-        return;
-      }
-      const text = await upstream.text();
-      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.send(text);
-    } catch (err) {
-      logger.error({ err }, "Maps proxy error");
-      res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-      res.send(`console.error('[RiskWise] Maps proxy unavailable');`);
-    }
-  });
+
 
   // tRPC
   app.use(
