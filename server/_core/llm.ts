@@ -210,13 +210,11 @@ const normalizeToolChoice = (
 };
 
 const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
-    : "https://forge.manus.im/v1/chat/completions";
+  `${ENV.RISKWISE_LLM_BASE_URL.replace(/\/$/, "")}/chat/completions`;
 
 const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+  if (!ENV.RISKWISE_LLM_API_KEY) {
+    throw new Error("RISKWISE_LLM_API_KEY is not configured");
   }
 };
 
@@ -280,7 +278,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } = params;
 
   const payload: Record<string, unknown> = {
-    model: "gemini-2.5-flash",
+    model: ENV.RISKWISE_LLM_MODEL,
     messages: messages.map(normalizeMessage),
   };
 
@@ -294,11 +292,6 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   );
   if (normalizedToolChoice) {
     payload.tool_choice = normalizedToolChoice;
-  }
-
-  payload.max_tokens = 32768
-  payload.thinking = {
-    "budget_tokens": 128
   }
 
   const normalizedResponseFormat = normalizeResponseFormat({
@@ -316,7 +309,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
+      authorization: `Bearer ${ENV.RISKWISE_LLM_API_KEY}`,
     },
     body: JSON.stringify(payload),
   });
@@ -324,7 +317,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `LLM invoke failed: ${response.status} ${response.statusText} - ${errorText}`
     );
   }
 
