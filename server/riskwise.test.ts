@@ -10,6 +10,26 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.mock("./db", () => ({
+  getActiveRiskEvents: vi.fn().mockResolvedValue([]),
+  getRouteHistory: vi.fn().mockResolvedValue([]),
+  getAllShippingRoutes: vi.fn().mockResolvedValue([]),
+  insertRouteEvaluation: vi.fn().mockResolvedValue(undefined),
+  getEvaluationById: vi.fn().mockResolvedValue(null),
+  getUserById: vi.fn().mockResolvedValue(null),
+  getUserByEmail: vi.fn().mockResolvedValue(null),
+  findRoute: vi.fn().mockResolvedValue(null),
+  insertShippingRoute: vi.fn().mockResolvedValue(undefined),
+  insertRiskEvent: vi.fn().mockResolvedValue(undefined),
+  getRouteTrend: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("./agents", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./agents")>();
+  return { ...actual, orchestrate: vi.fn().mockResolvedValue({ overallRiskScore: 45, primaryRiskFactor: "Weather", breakdown: { weather: 45, labor: 0, geopolitical: 0, congestion: 0 }, baseTransitDays: 14, riskNarrative: "Test", intelligenceSummary: "Test", dataSources: [], alternativeRoutes: [], recommendation: "OK", baseRouteWaypoints: [] }) };
+});
+
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
