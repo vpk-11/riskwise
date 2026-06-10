@@ -7,8 +7,37 @@
  *   Apollo  – The Route Optimizer: generates alternative routes when risk > 50
  */
 
-import { invokeLLM } from "./_core/llm";
+import { invokeLLM, type LLMConfig } from "./_core/llm";
+import { ENV } from "./_core/env";
+import { createLogger, logAgentTelemetry, logAthenaScan, logRouteEvaluation } from "./_core/logger";
 import { fetchAllRealTimeIntelligence, type LiveRiskEvent } from "./realtime";
+
+// ── Per-agent LLM configs (fall back to global if not set) ───────────────────
+
+const athenaConfig: LLMConfig = {
+  baseUrl: ENV.RISKWISE_ATHENA_LLM_BASE_URL,
+  apiKey: ENV.RISKWISE_ATHENA_LLM_API_KEY,
+  model: ENV.RISKWISE_ATHENA_LLM_MODEL,
+};
+
+const hermesConfig: LLMConfig = {
+  baseUrl: ENV.RISKWISE_HERMES_LLM_BASE_URL,
+  apiKey: ENV.RISKWISE_HERMES_LLM_API_KEY,
+  model: ENV.RISKWISE_HERMES_LLM_MODEL,
+};
+
+const apolloConfig: LLMConfig = {
+  baseUrl: ENV.RISKWISE_APOLLO_LLM_BASE_URL,
+  apiKey: ENV.RISKWISE_APOLLO_LLM_API_KEY,
+  model: ENV.RISKWISE_APOLLO_LLM_MODEL,
+};
+
+// ── Per-agent loggers ─────────────────────────────────────────────────────────
+
+const athenaLog = createLogger("athena");
+const hermesLog = createLogger("hermes");
+const apolloLog = createLogger("apollo");
+const orchestratorLog = createLogger("orchestrator");
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -82,9 +111,12 @@ export async function runAthena(
     liveSourceSummary = successfulSources.length > 0
       ? `Live intelligence fetched from: ${successfulSources.join(", ")} as of ${liveData.fetchedAt}`
       : "Live intelligence sources unavailable — using database events only.";
-    console.log(`[Athena] Live data: ${liveEvents.length} events from ${successfulSources.length} sources`);
+    athenaLog.info(
+      { eventCount: liveEvents.length, sourceCount: successfulSources.length, route: { origin, destination } },
+      `Live data fetched: ${liveEvents.length} events from ${successfulSources.length} sources`,
+    );
   } catch (e) {
-    console.warn("[Athena] Real-time fetch failed, falling back to DB events:", e);
+    athenaLog.warn({ err: e, route: { origin, destination } }, "Real-time fetch failed, falling back to DB events");
   }
 
   // Merge live events with DB events (live events take priority)
@@ -103,6 +135,7 @@ export async function runAthena(
     .map((d) => `- [${d.severity}] ${d.title} (${d.category}): affects ${d.affectedLocations.join(", ")}\n  ${d.description.slice(0, 200)}`)
     .join("\n");
 
+  athenaLog.debug({ route: { origin, destination } }, "Invoking LLM for intelligence analysis");
   const response = await invokeLLM({
     messages: [
       {
@@ -165,6 +198,17 @@ Respond with JSON in this exact format:
         },
       },
     },
+  }, athenaConfig);
+
+  logAgentTelemetry({
+    agent: "athena",
+    model: response._model,
+    latencyMs: response._latencyMs,
+    promptTokens: response.usage?.prompt_tokens,
+    completionTokens: response.usage?.completion_tokens,
+    totalTokens: response.usage?.total_tokens,
+    success: true,
+    route: { origin, destination },
   });
 
   const content = String(response.choices[0]?.message?.content ?? "{}");
@@ -178,6 +222,11 @@ export async function runHermes(
   destination: string,
   athenaResult: AthenaResult
 ): Promise<HermesResult> {
+  hermesLog.debug(
+    { route: { origin, destination }, disruptionCount: athenaResult.relevantDisruptions.length },
+    "Invoking LLM for risk scoring",
+  );
+
   const disruptionContext = athenaResult.relevantDisruptions
     .map((d) => `- [${d.severity}] ${d.title}: ${d.impactSummary}`)
     .join("\n");
@@ -249,6 +298,17 @@ Respond with JSON in this exact format:
         },
       },
     },
+  }, hermesConfig);
+
+  logAgentTelemetry({
+    agent: "hermes",
+    model: response._model,
+    latencyMs: response._latencyMs,
+    promptTokens: response.usage?.prompt_tokens,
+    completionTokens: response.usage?.completion_tokens,
+    totalTokens: response.usage?.total_tokens,
+    success: true,
+    route: { origin, destination },
   });
 
   const content = String(response.choices[0]?.message?.content ?? "{}");
@@ -262,6 +322,11 @@ export async function runApollo(
   destination: string,
   hermesResult: HermesResult
 ): Promise<ApolloResult> {
+  apolloLog.debug(
+    { route: { origin, destination }, riskScore: hermesResult.overallRiskScore },
+    "Invoking LLM for route optimization",
+  );
+
   const response = await invokeLLM({
     messages: [
       {
@@ -330,6 +395,17 @@ Respond with JSON in this exact format:
         },
       },
     },
+  }, apolloConfig);
+
+  logAgentTelemetry({
+    agent: "apollo",
+    model: response._model,
+    latencyMs: response._latencyMs,
+    promptTokens: response.usage?.prompt_tokens,
+    completionTokens: response.usage?.completion_tokens,
+    totalTokens: response.usage?.total_tokens,
+    success: true,
+    route: { origin, destination },
   });
 
   const content = String(response.choices[0]?.message?.content ?? "{}");
@@ -343,6 +419,9 @@ export async function orchestrate(
   destination: string,
   activeDisruptions: { title: string; category: string; severity: string; affectedLocations: string[]; description: string }[]
 ): Promise<OrchestrationResult> {
+  const orchestrationStart = Date.now();
+  orchestratorLog.info({ route: { origin, destination } }, `Starting orchestration: ${origin} -> ${destination}`);
+
   // Step 1: Athena researches relevant disruptions (with live data)
   let liveDataSources: { name: string; count: number; ok: boolean }[] = [];
   try {
@@ -358,8 +437,29 @@ export async function orchestrate(
   // Step 3: Apollo generates alternatives if risk > 50
   let apolloResult: ApolloResult = { alternativeRoutes: [], recommendation: "Route risk is within acceptable parameters. No rerouting required." };
   if (hermesResult.overallRiskScore > 50) {
+    apolloLog.info({ riskScore: hermesResult.overallRiskScore }, "Risk score > 50, invoking Apollo for alternatives");
     apolloResult = await runApollo(origin, destination, hermesResult);
   }
+
+  const durationMs = Date.now() - orchestrationStart;
+  const sourcesOk = liveDataSources.filter((s) => s.ok).length;
+  const sourcesFailed = liveDataSources.filter((s) => !s.ok).length;
+
+  logRouteEvaluation({
+    origin,
+    destination,
+    overallRiskScore: Math.round(hermesResult.overallRiskScore),
+    primaryRiskFactor: hermesResult.primaryRiskFactor,
+    durationMs,
+    agentsInvoked: hermesResult.overallRiskScore > 50 ? ["athena", "hermes", "apollo"] : ["athena", "hermes"],
+    dataSourcesOk: sourcesOk,
+    dataSourcesFailed: sourcesFailed,
+  });
+
+  orchestratorLog.info(
+    { route: { origin, destination }, riskScore: Math.round(hermesResult.overallRiskScore), durationMs },
+    `Orchestration complete in ${durationMs}ms`,
+  );
 
   // Generate base route waypoints (simplified great-circle approximation)
   const baseRouteWaypoints = generateBaseWaypoints(origin, destination);
@@ -397,26 +497,42 @@ export async function runAthenaScan(): Promise<{
   severity: "Low" | "Medium" | "High" | "Critical";
   affectedLocations: string[];
 }> {
+  const scanStart = Date.now();
+
   // Try live sources first
   try {
     const liveData = await fetchAllRealTimeIntelligence();
     if (liveData.events.length > 0) {
       // Pick the highest-severity event that isn't already a country-risk entry
       const candidate = liveData.events.find((e) => e.sourceProvider !== "Osiris Country Risk Index") ?? liveData.events[0];
-      console.log(`[Athena Scan] Using live event from ${candidate.sourceProvider}: ${candidate.title}`);
-      return {
+      athenaLog.info(
+        { provider: candidate.sourceProvider, severity: candidate.severity, title: candidate.title },
+        `Scan picked live event from ${candidate.sourceProvider}`,
+      );
+      const result = {
         title: candidate.title,
         description: `[Live — ${candidate.sourceProvider}] ${candidate.description}`,
         category: candidate.category,
         severity: candidate.severity,
         affectedLocations: candidate.affectedLocations,
       };
+      logAthenaScan({
+        source: "live",
+        provider: candidate.sourceProvider,
+        title: candidate.title,
+        severity: candidate.severity,
+        category: candidate.category,
+        durationMs: Date.now() - scanStart,
+        success: true,
+      });
+      return result;
     }
   } catch (e) {
-    console.warn("[Athena Scan] Live fetch failed, falling back to LLM generation:", e);
+    athenaLog.warn({ err: e }, "Live fetch failed during Athena scan, falling back to LLM generation");
   }
 
   // Fallback: LLM-generated synthetic event
+  athenaLog.warn("All live sources empty, generating synthetic event via LLM");
   const response = await invokeLLM({
     messages: [
       {
@@ -456,10 +572,30 @@ Respond with JSON in this exact format:
         },
       },
     },
+  }, athenaConfig);
+
+  logAgentTelemetry({
+    agent: "athena-scan",
+    model: response._model,
+    latencyMs: response._latencyMs,
+    promptTokens: response.usage?.prompt_tokens,
+    completionTokens: response.usage?.completion_tokens,
+    totalTokens: response.usage?.total_tokens,
+    success: true,
   });
 
-  const content = String(response.choices[0]?.message?.content ?? "{}");
-  return JSON.parse(content);
+  const parsed = JSON.parse(String(response.choices[0]?.message?.content ?? "{}"));
+
+  logAthenaScan({
+    source: "llm-fallback",
+    title: parsed.title ?? "unknown",
+    severity: parsed.severity ?? "unknown",
+    category: parsed.category ?? "unknown",
+    durationMs: Date.now() - scanStart,
+    success: true,
+  });
+
+  return parsed;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

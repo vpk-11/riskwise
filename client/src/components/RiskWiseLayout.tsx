@@ -44,7 +44,7 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
       <aside
         className={cn(
           "fixed lg:relative z-50 lg:z-auto h-full flex flex-col transition-transform duration-300 ease-out",
-          "w-64 bg-sidebar border-r border-sidebar-border",
+          "w-72 bg-sidebar border-r border-sidebar-border",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
         style={{
@@ -54,11 +54,11 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
         {/* Logo */}
         <div className="flex items-center gap-3 px-5 py-5 border-b border-sidebar-border">
           <div className="relative">
-            <Shield className="w-8 h-8 text-primary glow-cyan" />
-            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-primary rounded-full neon-pulse" />
+            <Shield className="w-8 h-8 text-primary" />
+            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-primary rounded-full" />
           </div>
           <div>
-            <h1 className="font-display text-lg font-bold text-primary text-glow-cyan tracking-wider">
+            <h1 className="font-display text-xl font-bold text-primary text-glow-cyan tracking-wider">
               RISKWISE
             </h1>
             <p className="text-[10px] text-muted-foreground font-mono tracking-widest uppercase">
@@ -111,7 +111,7 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
                     >
                       {item.label}
                     </div>
-                    <div className="text-[10px] text-muted-foreground font-mono truncate">
+                    <div className="text-[11px] text-muted-foreground font-mono truncate">
                       {item.description}
                     </div>
                   </div>
@@ -144,17 +144,17 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-primary neon-pulse" />
+            <div className="w-1.5 h-1.5 rounded-full bg-primary" />
             <span className="font-mono text-xs text-muted-foreground tracking-widest uppercase">
               {NAV_ITEMS.find((n) => n.path === activePath)?.label ?? "Dashboard"}
             </span>
           </div>
           <div className="ml-auto flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
+            <div className="hidden sm:flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
               <span className="text-[oklch(0.82_0.22_145)]">●</span>
               <span>3 AGENTS ACTIVE</span>
             </div>
-            <div className="text-[11px] font-mono text-muted-foreground">
+            <div className="text-xs font-mono text-muted-foreground">
               {new Date().toUTCString().slice(0, 25)} UTC
             </div>
           </div>

@@ -112,3 +112,12 @@ temp/
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
 .project-config.json
+
+.claude/
+
+graphify-out/manifest.json
+graphify-out/cost.json
+graphify-out/.graphify_root
+graphify-out/.graphify_python
+
+.codex/

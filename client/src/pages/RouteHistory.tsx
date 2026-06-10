@@ -137,7 +137,7 @@ export default function RouteHistory() {
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-border shrink-0 flex items-center justify-between">
+      <div className="px-6 py-5 border-b border-border shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <History className="w-5 h-5 text-primary" />
           <div>
@@ -157,7 +157,7 @@ export default function RouteHistory() {
 
       {/* Summary stats */}
       {history && history.length > 0 && (
-        <div className="px-5 py-3 border-b border-border shrink-0 grid grid-cols-3 gap-4">
+        <div className="px-6 py-4 border-b border-border shrink-0 grid grid-cols-3 gap-4">
           <div>
             <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Total Evaluations</div>
             <div className="text-xl font-display font-bold text-primary">{history.length}</div>
@@ -178,11 +178,11 @@ export default function RouteHistory() {
       )}
 
       {/* History list */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
+      <div className="flex-1 overflow-y-auto p-5 space-y-2 min-h-0">
         {isLoading && (
           <div className="space-y-2">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="cyber-card p-4 animate-pulse">
+              <div key={i} className="cyber-card p-5 animate-pulse">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 flex-1">
                     <div className="w-10 h-10 rounded bg-secondary shrink-0" />
@@ -228,7 +228,7 @@ export default function RouteHistory() {
             >
               {/* Row header */}
               <div
-                className="flex items-center gap-3 p-4"
+                className="flex items-center gap-3 p-5"
                 onClick={() => setExpandedId(isExpanded ? null : evaluation.id)}
               >
                 {/* Risk score badge */}
@@ -292,7 +292,7 @@ export default function RouteHistory() {
 
               {/* Expanded details */}
               {isExpanded && (
-                <div className="px-4 pb-4 space-y-3 border-t border-border/50 pt-3">
+                <div className="px-5 pb-5 space-y-3 border-t border-border/50 pt-4">
                   {/* Primary risk factor */}
                   <div className="flex items-start gap-2">
                     <AlertTriangle className={cn("w-4 h-4 mt-0.5 shrink-0", getRiskTextClass(evaluation.overallRiskScore))} />
@@ -361,7 +361,7 @@ export default function RouteHistory() {
                         <Cpu className="w-3.5 h-3.5 text-[oklch(0.72_0.22_195)]" />
                         <span className="text-[10px] font-mono text-[oklch(0.72_0.22_195)] uppercase tracking-wider">Hermes Risk Analysis</span>
                       </div>
-                      <p className="text-xs font-mono text-foreground/80 leading-relaxed whitespace-pre-wrap">{riskNarrative}</p>
+                      <p className="text-xs text-foreground/80 leading-relaxed">{riskNarrative}</p>
                     </div>
                   )}
 
@@ -372,7 +372,7 @@ export default function RouteHistory() {
                         <Globe className="w-3.5 h-3.5 text-[oklch(0.80_0.20_75)]" />
                         <span className="text-[10px] font-mono text-[oklch(0.80_0.20_75)] uppercase tracking-wider">Athena Intelligence Summary</span>
                       </div>
-                      <p className="text-xs font-mono text-foreground/80 leading-relaxed whitespace-pre-wrap">{intelligenceSummary}</p>
+                      <p className="text-xs text-foreground/80 leading-relaxed">{intelligenceSummary}</p>
                     </div>
                   )}
 

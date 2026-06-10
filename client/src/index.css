@@ -153,22 +153,6 @@
     border-color: oklch(0.65 0.25 25 / 0.5);
   }
 
-  /* Scanline overlay effect */
-  .scanlines::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      oklch(0 0 0 / 0.03) 2px,
-      oklch(0 0 0 / 0.03) 4px
-    );
-    pointer-events: none;
-    z-index: 1;
-  }
-
   /* Cyberpunk card */
   .cyber-card {
     @apply bg-card border border-border rounded-sm relative overflow-hidden;
@@ -193,11 +177,6 @@
     animation: neon-pulse 2s ease-in-out infinite;
   }
 
-  @keyframes scan-line {
-    0% { transform: translateY(-100%); }
-    100% { transform: translateY(100vh); }
-  }
-
   /* Terminal cursor blink */
   @keyframes cursor-blink {
     0%, 100% { opacity: 1; }
@@ -211,5 +190,28 @@
   @keyframes risk-ring {
     from { stroke-dashoffset: 283; }
     to { stroke-dashoffset: var(--target-offset); }
+  }
+
+  /* MapLibre popup — override defaults to match dark theme */
+  .maplibregl-popup-content {
+    background: transparent !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+  .maplibregl-popup-tip {
+    border-top-color: oklch(0.20 0.03 240) !important;
+    border-bottom-color: oklch(0.20 0.03 240) !important;
+  }
+  .maplibregl-popup-close-button {
+    display: none !important;
+  }
+  .maplibregl-ctrl-attrib {
+    background: oklch(0.08 0.01 240 / 0.7) !important;
+    color: oklch(0.55 0.04 220) !important;
+    font-size: 10px !important;
+  }
+  .maplibregl-ctrl-attrib a {
+    color: oklch(0.72 0.22 195) !important;
   }
 }
