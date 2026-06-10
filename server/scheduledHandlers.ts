@@ -21,5 +21,6 @@ export async function athenaHourlyScan(): Promise<void> {
     );
   } catch (err) {
     logger.error({ err }, "[Athena Scan] Scan failed");
+    throw err;
   }
 }

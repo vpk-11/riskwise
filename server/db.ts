@@ -64,7 +64,7 @@ export async function findRoute(origin: string, destination: string) {
   const results = await db
     .select()
     .from(shippingRoutes)
-    .where(eq(shippingRoutes.originPort, origin))
+    .where(and(eq(shippingRoutes.originPort, origin), eq(shippingRoutes.destinationPort, destination)))
     .limit(1);
   return results[0] ?? null;
 }
