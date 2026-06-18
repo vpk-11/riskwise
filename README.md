@@ -11,7 +11,7 @@ Maritime supply chain intelligence platform. Evaluate shipping routes for geopol
 | Frontend | React 19, Tailwind CSS 4, Wouter, shadcn/ui |
 | Backend | Node.js, Express 4, tRPC 11, Drizzle ORM |
 | Database | PostgreSQL |
-| AI | OpenAI-compatible API (Ollama locally, OpenAI/Anthropic in prod) |
+| AI | LiteLLM gateway (Ollama locally, remote providers through one interface) |
 | Auth | JWT via jose, cookie-based sessions |
 | Logging | Pino (structured JSON) |
 | Scheduling | node-cron (hourly Athena background scan) |
@@ -37,7 +37,7 @@ Risk thresholds: Green (0-30), Amber (31-60), Red (61-100). Critical alerts (sco
 - Node.js 20+
 - pnpm
 - PostgreSQL
-- [Ollama](https://ollama.ai) for local LLM, or an OpenAI/Anthropic API key
+- [Ollama](https://ollama.ai) for local LLM, or a LiteLLM-backed provider setup
 
 ### Install
 
@@ -53,13 +53,12 @@ Create `.env` at the project root:
 DATABASE_URL=postgresql://user:password@localhost:5432/riskwise
 JWT_SECRET=your-secret-minimum-32-characters-long
 
-# LLM config (defaults to Ollama + Mistral)
+# LLM config (defaults to Ollama + Mistral via LiteLLM)
 RISKWISE_LLM_BASE_URL=http://localhost:11434/v1
 RISKWISE_LLM_API_KEY=ollama
 RISKWISE_LLM_MODEL=mistral
 
 # Optional
-GOOGLE_MAPS_API_KEY=
 RISKWISE_ALERT_WEBHOOK_URL=
 ```
 
@@ -73,7 +72,7 @@ pnpm db:push
 
 ```bash
 pnpm dev
-# http://localhost:5000
+# http://localhost:3000
 ```
 
 ### LLM options
@@ -83,14 +82,14 @@ pnpm dev
 ollama pull mistral && ollama serve
 ```
 
-**OpenAI:**
+**LiteLLM gateway with OpenAI-compatible upstreams:**
 ```env
 RISKWISE_LLM_BASE_URL=https://api.openai.com/v1
 RISKWISE_LLM_API_KEY=sk-...
 RISKWISE_LLM_MODEL=gpt-4o
 ```
 
-**Anthropic** (via OpenAI-compatible proxy or gateway):
+**Anthropic** (via LiteLLM or another OpenAI-compatible gateway):
 ```env
 RISKWISE_LLM_MODEL=claude-sonnet-4-5
 ```
@@ -129,12 +128,12 @@ server/
   realtime.ts           live data fetchers (GDELT, NASA EONET, USGS)
   scheduledHandlers.ts  hourly Athena scan via node-cron
   routers.ts            tRPC router assembly
-  routers/riskwise.ts   route eval, history, disruptions, auth procedures
+  routers/riskwise.ts   route eval, rerun, history, disruptions, auth procedures
   _core/
-    index.ts        Express app, middleware, request ID, Maps proxy
+    index.ts        Express app, middleware, request ID, cron, Vite middleware
     context.ts      tRPC context + JWT resolution
     env.ts          Zod-validated env config (fails fast on missing vars)
-    llm.ts          OpenAI-compatible LLM client
+    llm.ts          LiteLLM-backed LLM client with OpenAI-compatible surface
     logger.ts       Pino instance
     notification.ts console + optional webhook alerts
     errors.ts       typed HTTP error classes
