@@ -1,0 +1,27 @@
+name: CI
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'graphify-out/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'graphify-out/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: vpk-11/workflows/.github/workflows/node-ci.yml@v1
+    with:
+      pm: 'pnpm'
+      scripts: 'check test build'
