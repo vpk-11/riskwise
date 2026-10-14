@@ -15,6 +15,7 @@ export async function notifyOwner(payload: NotificationPayload): Promise<boolean
 
   try {
     const response = await fetch(ENV.RISKWISE_ALERT_WEBHOOK_URL, {
+      signal: AbortSignal.timeout(10_000),
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: payload.title, content: payload.content, ts: new Date().toISOString() }),
