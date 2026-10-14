@@ -70,9 +70,20 @@ RISKWISE_TRUST_PROXY=0            # 1 behind a single reverse proxy
 
 ### Database
 
+With a native Postgres:
+
 ```bash
 createdb riskwise
 pnpm db:migrate   # applies drizzle/*.sql in order, tracked in _migrations
+```
+
+Or with Docker, matching `DATABASE_URL=postgresql://localhost/riskwise` (trust auth, bound to localhost only):
+
+```bash
+docker run -d --name riskwise-pg -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_USER="$USER" -e POSTGRES_DB=riskwise -e POSTGRES_HOST_AUTH_METHOD=trust \
+  -v riskwise-pgdata:/var/lib/postgresql/data --restart unless-stopped postgres:16
+pnpm db:migrate
 ```
 
 ### Dev server
