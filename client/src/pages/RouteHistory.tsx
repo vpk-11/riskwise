@@ -30,7 +30,7 @@ function RouteTrendSparkline({ originPort, destinationPort }: { originPort: stri
   if (isLoading) {
     return (
       <div className="h-16 flex items-center justify-center">
-        <div className="text-[10px] font-mono text-muted-foreground/40">Loading trend...</div>
+        <div className="text-[11px] font-mono text-muted-foreground/40">Loading trend...</div>
       </div>
     );
   }
@@ -38,7 +38,7 @@ function RouteTrendSparkline({ originPort, destinationPort }: { originPort: stri
   if (!trend || trend.length < 2) {
     return (
       <div className="h-16 flex items-center justify-center">
-        <div className="text-[10px] font-mono text-muted-foreground/40">Not enough data for trend (need 2+ evaluations)</div>
+        <div className="text-[11px] font-mono text-muted-foreground/40">Not enough data for trend (need 2+ evaluations)</div>
       </div>
     );
   }
@@ -65,12 +65,12 @@ function RouteTrendSparkline({ originPort, destinationPort }: { originPort: stri
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5 text-muted-foreground" />
-          <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Risk Trend</span>
-          <span className="text-[9px] font-mono text-muted-foreground/50">{trend.length} evaluations</span>
+          <span className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Risk Trend</span>
+          <span className="text-[11px] font-mono text-muted-foreground/50">{trend.length} evaluations</span>
         </div>
         <div className="flex items-center gap-1" style={{ color: trendColor }}>
           <TrendIcon className="w-3 h-3" />
-          <span className="text-[10px] font-mono font-bold">{trendLabel}</span>
+          <span className="text-[11px] font-mono font-bold">{trendLabel}</span>
         </div>
       </div>
       <ResponsiveContainer width="100%" height={64}>
@@ -159,17 +159,17 @@ export default function RouteHistory() {
       {history && history.length > 0 && (
         <div className="px-6 py-4 border-b border-border shrink-0 grid grid-cols-3 gap-4">
           <div>
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Total Evaluations</div>
+            <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Total Evaluations</div>
             <div className="text-xl font-display font-bold text-primary">{history.length}</div>
           </div>
           <div>
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Avg Risk Score</div>
+            <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Avg Risk Score</div>
             <div className="text-xl font-display font-bold" style={{ color: getRiskColor(Math.round(history.reduce((a, b) => a + b.overallRiskScore, 0) / history.length)) }}>
               {Math.round(history.reduce((a, b) => a + b.overallRiskScore, 0) / history.length)}
             </div>
           </div>
           <div>
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Critical Routes</div>
+            <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Critical Routes</div>
             <div className="text-xl font-display font-bold text-[oklch(0.60_0.28_15)]">
               {history.filter((h) => h.overallRiskScore > 75).length}
             </div>
@@ -212,8 +212,8 @@ export default function RouteHistory() {
         {history?.map((evaluation) => {
           const isExpanded = expandedId === evaluation.id;
           const breakdown = evaluation.breakdown as { weather: number; labor: number; geopolitical: number; congestion: number };
-          const altRoutes = evaluation.alternativeRoutes as { name: string; transitDays: number; riskScore: number; costImpact: string; description?: string }[] | null;
-          const dataSources = evaluation.dataSources as { name: string; count: number; ok: boolean }[] | null;
+          const altRoutes = evaluation.alternativeRoutes as { optionId?: string; name: string; transitDays: number; riskScore?: number; extraDays?: number }[] | null;
+          const dataSources = evaluation.dataSources as { name: string; count: number; ok: boolean; kind?: "live" | "baseline" }[] | null;
           const riskNarrative = evaluation.riskNarrative as string | null;
           const intelligenceSummary = evaluation.intelligenceSummary as string | null;
 
@@ -263,14 +263,14 @@ export default function RouteHistory() {
                     </span>
                     {altRoutes && altRoutes.length > 0 && (
                       <span className="text-[oklch(0.75_0.20_145)]">
-                        {altRoutes.length} alt. route{altRoutes.length > 1 ? "s" : ""}
+                        {altRoutes.length} suggestion{altRoutes.length > 1 ? "s" : ""}
                       </span>
                     )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <div className="text-right text-[10px] font-mono text-muted-foreground/60 hidden sm:block">
+                  <div className="text-right text-[11px] font-mono text-muted-foreground/60 hidden sm:block">
                     <div>{new Date(evaluation.evaluatedAt).toLocaleDateString()}</div>
                     <div>{new Date(evaluation.evaluatedAt).toLocaleTimeString()}</div>
                   </div>
@@ -297,7 +297,7 @@ export default function RouteHistory() {
                   <div className="flex items-start gap-2">
                     <AlertTriangle className={cn("w-4 h-4 mt-0.5 shrink-0", getRiskTextClass(evaluation.overallRiskScore))} />
                     <div>
-                      <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-0.5">Primary Risk Factor</div>
+                      <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider mb-0.5">Primary Risk Factor</div>
                       <p className="text-sm text-foreground/90">{evaluation.primaryRiskFactor}</p>
                     </div>
                   </div>
@@ -307,12 +307,12 @@ export default function RouteHistory() {
                     <div>
                       <div className="flex items-center gap-1.5 mb-2">
                         <BarChart3 className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Risk Breakdown</span>
+                        <span className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Risk Breakdown</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         {Object.entries(breakdown).map(([key, value]) => (
                           <div key={key} className="flex items-center gap-2">
-                            <div className="text-[10px] font-mono text-muted-foreground capitalize w-20 shrink-0">{key}</div>
+                            <div className="text-[11px] font-mono text-muted-foreground capitalize w-20 shrink-0">{key}</div>
                             <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
                               <div
                                 className="h-full rounded-full"
@@ -323,7 +323,7 @@ export default function RouteHistory() {
                                 }}
                               />
                             </div>
-                            <span className={cn("text-[10px] font-mono font-bold w-6 text-right", getRiskTextClass(value))}>
+                            <span className={cn("text-[11px] font-mono font-bold w-6 text-right", getRiskTextClass(value))}>
                               {value}
                             </span>
                           </div>
@@ -341,12 +341,20 @@ export default function RouteHistory() {
                   {/* Alternative routes */}
                   {altRoutes && altRoutes.length > 0 && (
                     <div>
-                      <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider mb-2">Alternative Routes</div>
+                      <div className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider mb-2">
+                        {altRoutes.every((a) => a.optionId) ? (
+                          <>Alternative Lanes <span className="text-muted-foreground/60">(computed on model lanes)</span></>
+                        ) : (
+                          <>Alternative Suggestions <span className="text-[oklch(0.80_0.20_75)]">(illustrative, older evaluation)</span></>
+                        )}
+                      </div>
                       <div className="space-y-1.5">
                         {altRoutes.map((alt, i) => (
                           <div key={i} className="flex items-center gap-3 text-xs font-mono p-2 bg-secondary/30 rounded-sm">
                             <span className="text-foreground/80 flex-1">{alt.name}</span>
-                            <span className={cn("font-bold", getRiskTextClass(alt.riskScore))}>{alt.riskScore}/100</span>
+                            {alt.optionId && alt.riskScore !== undefined && (
+                              <span className={cn("font-bold", getRiskTextClass(alt.riskScore))}>{alt.riskScore}/100</span>
+                            )}
                             <span className="text-muted-foreground">{alt.transitDays}d</span>
                           </div>
                         ))}
@@ -359,7 +367,7 @@ export default function RouteHistory() {
                     <div className="border border-border/60 rounded-sm p-3 bg-secondary/20">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Cpu className="w-3.5 h-3.5 text-[oklch(0.72_0.22_195)]" />
-                        <span className="text-[10px] font-mono text-[oklch(0.72_0.22_195)] uppercase tracking-wider">Hermes Risk Analysis</span>
+                        <span className="text-[11px] font-mono text-[oklch(0.72_0.22_195)] uppercase tracking-wider">Hermes Risk Analysis</span>
                       </div>
                       <p className="text-xs text-foreground/80 leading-relaxed">{riskNarrative}</p>
                     </div>
@@ -370,7 +378,7 @@ export default function RouteHistory() {
                     <div className="border border-border/60 rounded-sm p-3 bg-secondary/20">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Globe className="w-3.5 h-3.5 text-[oklch(0.80_0.20_75)]" />
-                        <span className="text-[10px] font-mono text-[oklch(0.80_0.20_75)] uppercase tracking-wider">Athena Intelligence Summary</span>
+                        <span className="text-[11px] font-mono text-[oklch(0.80_0.20_75)] uppercase tracking-wider">Athena Intelligence Summary</span>
                       </div>
                       <p className="text-xs text-foreground/80 leading-relaxed">{intelligenceSummary}</p>
                     </div>
@@ -381,12 +389,12 @@ export default function RouteHistory() {
                     <div className="border border-border/60 rounded-sm p-3 bg-secondary/20">
                       <div className="flex items-center gap-1.5 mb-2">
                         <Database className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">Data Sources</span>
-                        <span className="ml-auto text-[9px] font-mono text-muted-foreground/50">LIVE INTELLIGENCE</span>
+                        <span className="text-[11px] font-mono text-muted-foreground uppercase tracking-wider">Data Sources</span>
+                        <span className="ml-auto text-[11px] font-mono text-muted-foreground/50">LIVE FEEDS + STATIC BASELINE</span>
                       </div>
                       <div className="grid grid-cols-2 gap-1.5">
                         {dataSources.map((src, i) => (
-                          <div key={i} className="flex items-center gap-2 text-[10px] font-mono">
+                          <div key={i} className="flex items-center gap-2 text-[11px] font-mono">
                             <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", src.ok ? "bg-[oklch(0.75_0.20_145)]" : "bg-[oklch(0.60_0.25_25)]")} />
                             <span className="text-foreground/70 flex-1 truncate">{src.name}</span>
                             <span className="text-muted-foreground/60">{src.count} event{src.count !== 1 ? "s" : ""}</span>
@@ -395,8 +403,8 @@ export default function RouteHistory() {
                       </div>
                       <div className="mt-2 flex items-center gap-1.5">
                         <Zap className="w-3 h-3 text-muted-foreground/40" />
-                        <span className="text-[9px] font-mono text-muted-foreground/40">
-                          Scores are LLM-generated from live intelligence feeds. Validate critical decisions with official sources.
+                        <span className="text-[11px] font-mono text-muted-foreground/40">
+                          Scores are computed in code from live events; the country risk table is a static baseline. Narratives are LLM-written. Validate critical decisions with official sources.
                         </span>
                       </div>
                     </div>
@@ -404,7 +412,7 @@ export default function RouteHistory() {
 
                   {/* Query text */}
                   {evaluation.queryText && (
-                    <div className="text-[10px] font-mono text-muted-foreground/60 italic">
+                    <div className="text-[11px] font-mono text-muted-foreground/60 italic">
                       Query: "{evaluation.queryText}"
                     </div>
                   )}
