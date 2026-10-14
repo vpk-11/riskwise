@@ -1,0 +1,31 @@
+databases:
+  - name: riskwise-db
+    databaseName: riskwise
+    plan: free
+
+services:
+  - type: web
+    name: riskwise
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build
+    startCommand: node dist/migrate.js && pnpm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: riskwise-db
+          property: connectionString
+      # Hosted OpenAI-compatible LLM. Render has no Ollama; set all three in the dashboard.
+      - key: RISKWISE_LLM_BASE_URL
+        sync: false
+      - key: RISKWISE_LLM_API_KEY
+        sync: false
+      - key: RISKWISE_LLM_MODEL
+        sync: false
+      - key: RISKWISE_ALERT_WEBHOOK_URL
+        sync: false
+      - key: RISKWISE_EVAL_LIMIT_PER_HOUR
+        value: "10"
