@@ -27,6 +27,12 @@ describe("ENV", () => {
     expect(env.LOG_LEVEL).toBeUndefined();
   });
 
+  it("trusts no proxy by default, and the hop count when set", async () => {
+    expect((await loadEnv({})).RISKWISE_TRUST_PROXY).toBe(0);
+    expect((await loadEnv({ RISKWISE_TRUST_PROXY: "1" })).RISKWISE_TRUST_PROXY).toBe(1);
+    expect((await loadEnv({ RISKWISE_TRUST_PROXY: "" })).RISKWISE_TRUST_PROXY).toBe(0);
+  });
+
   it("keeps real values", async () => {
     const env = await loadEnv({ RISKWISE_LLM_MODEL: "gpt-oss:20b", RISKWISE_EVAL_LIMIT_PER_HOUR: "3" });
     expect(env.RISKWISE_LLM_MODEL).toBe("gpt-oss:20b");

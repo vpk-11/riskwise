@@ -31,6 +31,9 @@ const envSchema = z.object({
 
   // Max route evaluations per client IP per hour (each one costs LLM calls). 0 disables the limit.
   RISKWISE_EVAL_LIMIT_PER_HOUR: z.coerce.number().int().min(0).default(10),
+
+  // Reverse proxies in front of the app whose X-Forwarded-For to trust (Render: 1). 0 trusts none, so a client cannot fake its IP.
+  RISKWISE_TRUST_PROXY: z.coerce.number().int().min(0).default(0),
 });
 
 // A blank assignment such as RISKWISE_LLM_API_KEY= in a dotenv file must mean "unset", not an empty override of the default.

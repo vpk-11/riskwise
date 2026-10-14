@@ -31,7 +31,7 @@ Three agents collaborate on every route evaluation:
 
 **Data sources.** gCaptain, Seatrade Maritime, BBC, Al Jazeera, and NYT RSS, NASA EONET, and USGS are live. General news feeds rarely mention shipping, so most RSS events come from the trade press. The country risk table is a static, hand-maintained baseline and is labelled as such. If every live feed is down and no recent live event is stored, evaluation returns an error instead of a score.
 
-Risk thresholds: Green (0-30), Amber (31-60), Red (61-100). Critical alerts (score > 75) fire a console log and optional webhook. Evaluations are rate limited per IP (`RISKWISE_EVAL_LIMIT_PER_HOUR`, default 10).
+Risk thresholds: Green (0-30), Amber (31-60), Red (61-100). Critical alerts (score > 75) fire a console log and optional webhook. Evaluations are rate limited per IP (`RISKWISE_EVAL_LIMIT_PER_HOUR`, default 10). Set `RISKWISE_TRUST_PROXY=1` behind one reverse proxy (the Render blueprint does); it defaults to 0 so a client cannot fake `X-Forwarded-For`.
 
 ---
 
@@ -65,6 +65,7 @@ RISKWISE_LLM_MODEL=mistral
 # Optional
 RISKWISE_ALERT_WEBHOOK_URL=
 RISKWISE_EVAL_LIMIT_PER_HOUR=10   # 0 disables the limit
+RISKWISE_TRUST_PROXY=0            # 1 behind a single reverse proxy
 ```
 
 ### Database

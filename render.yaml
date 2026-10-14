@@ -29,3 +29,6 @@ services:
         sync: false
       - key: RISKWISE_EVAL_LIMIT_PER_HOUR
         value: "10"
+      # Render puts one proxy in front of the app; trust its X-Forwarded-For so the rate limit sees real client IPs
+      - key: RISKWISE_TRUST_PROXY
+        value: "1"

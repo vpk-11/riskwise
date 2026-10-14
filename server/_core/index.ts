@@ -30,8 +30,9 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
-  // Behind a reverse proxy (Render) req.ip is the proxy unless this is set; the evaluation rate limit keys on it.
-  app.set("trust proxy", 1);
+  // The evaluation rate limit keys on req.ip. Behind a reverse proxy that is the proxy unless the hop count is set.
+  // Left at 0 by default: trusting X-Forwarded-For with no proxy lets any client fake its IP and dodge the limit.
+  app.set("trust proxy", ENV.RISKWISE_TRUST_PROXY);
   const server = createServer(app);
 
   app.use(express.json({ limit: "100kb" }));
