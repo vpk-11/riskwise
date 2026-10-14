@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { notifyOwner } from "./notification";
-import { adminProcedure, publicProcedure, router } from "./trpc";
+import { checkLlm, type LlmStatus } from "./llm";
+import { publicProcedure, router } from "./trpc";
 
 export const systemRouter = router({
   health: publicProcedure
@@ -13,17 +13,14 @@ export const systemRouter = router({
       ok: true,
     })),
 
-  notifyOwner: adminProcedure
-    .input(
-      z.object({
-        title: z.string().min(1, "title is required"),
-        content: z.string().min(1, "content is required"),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const delivered = await notifyOwner(input);
-      return {
-        success: delivered,
-      } as const;
-    }),
+  /** Whether the configured LLM endpoint is up and has the configured model. Cached briefly: the UI polls it. */
+  llm: publicProcedure.query((): Promise<LlmStatus> => cachedLlmStatus()),
 });
+
+const LLM_STATUS_TTL_MS = 30_000;
+let llmStatus: { at: number; value: Promise<LlmStatus> } | null = null;
+
+export function cachedLlmStatus(): Promise<LlmStatus> {
+  if (!llmStatus || Date.now() - llmStatus.at > LLM_STATUS_TTL_MS) llmStatus = { at: Date.now(), value: checkLlm() };
+  return llmStatus.value;
+}

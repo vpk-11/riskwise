@@ -3,7 +3,6 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
-  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
 
   // Global LLM config — used by all agents unless overridden below
   RISKWISE_LLM_BASE_URL: z.string().default("http://localhost:11434/v1"),
@@ -29,9 +28,15 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).optional(),
   RISKWISE_ALERT_WEBHOOK_URL: z.string().optional(),
   PORT: z.string().optional(),
+
+  // Max route evaluations per client IP per hour (each one costs LLM calls). 0 disables the limit.
+  RISKWISE_EVAL_LIMIT_PER_HOUR: z.coerce.number().int().min(0).default(10),
 });
 
-const parsed = envSchema.safeParse(process.env);
+// A blank assignment such as RISKWISE_LLM_API_KEY= in a dotenv file must mean "unset", not an empty override of the default.
+const nonEmpty = Object.fromEntries(Object.entries(process.env).filter(([, value]) => value !== ""));
+
+const parsed = envSchema.safeParse(nonEmpty);
 
 if (!parsed.success) {
   console.error("[Env] Invalid or missing environment variables:");
