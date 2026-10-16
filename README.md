@@ -1,6 +1,6 @@
 # RiskWise
-<!-- version: v1.2.0 -->
-![Version](https://img.shields.io/badge/version-v1.2.0-blue)
+<!-- version: v2.0.0 -->
+![Version](https://img.shields.io/badge/version-v2.0.0-blue)
 
 Maritime supply chain intelligence platform. Evaluate shipping routes for geopolitical, weather, labor, and congestion risk using a multi-agent AI pipeline. Risk scores are computed in code from live events; the LLM writes narratives only. Includes a live disruption feed with source labels.
 
@@ -194,6 +194,7 @@ render.yaml         Render blueprint: web service + Postgres
 *RiskWise was initially ideated and bootstrapped using [Manus AI](https://manus.im) for the Manus AI Hackathon at Boston Tech Week 2026.*
 
 ## Changelog
+- **v2.0.0** (2026-10-16): major bump
 - **v1.2.0** (2026-09-28): minor bump
 - **v1.1.1** (2026-09-26): patch bump
 - **v1.1.0** (2026-09-26): minor bump
