@@ -1,16 +1,21 @@
 /**
- * RiskWise — Real-Time Intelligence Fetcher
+ * RiskWise: Real-Time Intelligence Fetcher
  *
  * Pulls live data from three open sources (no API keys required):
- *   1. RSS OSINT   – BBC World / Al Jazeera / NYT World (geopolitical/conflict)
+ *   1. RSS news    – gCaptain and Seatrade Maritime (trade press), BBC World / Al Jazeera / NYT World
  *   2. NASA EONET  – Active severe storms, volcanoes, sea ice
- *   3. USGS        – Significant earthquakes (M4.5+) in the last 24 h
- *   4. Country Risk – Composite risk index enriched with live quake data
+ *   3. USGS        – Significant earthquakes (M5.0+) in the last 24 h
+ * Plus a static country-risk baseline (hand-maintained table, not a live feed).
  *
  * All functions are server-side only and return normalised RiskWise event objects.
  */
 
+import { z } from "zod";
+import { PORT_NAMES, type LngLat } from "@shared/ports";
+import { categoryEnum, severityEnum } from "../drizzle/schema";
 import { createLogger } from "./_core/logger";
+import { stripInvisible } from "./promptSafety";
+import type { Category, Severity } from "./scoring";
 
 const log = createLogger("realtime");
 
@@ -19,23 +24,72 @@ const log = createLogger("realtime");
 export interface LiveRiskEvent {
   title: string;
   description: string;
-  category: "Weather" | "Strike" | "Geopolitical" | "Port Congestion";
-  severity: "Low" | "Medium" | "High" | "Critical";
+  category: Category;
+  severity: Severity;
   affectedLocations: string[];
   sourceUrl?: string;
   sourceProvider: string;
   fetchedAt: string; // ISO timestamp
+  coordinates?: LngLat; // exact [lng, lat] when the source provides one
+}
+
+export type SourceKind = "live" | "baseline";
+
+/** Provider name on events from the static country-risk table. These are never persisted as live. */
+export const BASELINE_PROVIDER = "Country Risk Baseline";
+
+export interface SourceSummary {
+  name: string;
+  count: number;
+  ok: boolean;
+  kind: SourceKind;
+  latencyMs: number;
+}
+
+interface FetcherResult {
+  events: LiveRiskEvent[];
+  count: number;
+  ok: boolean;
+}
+
+const liveEventSchema = z.object({
+  title: z.string().min(1),
+  description: z.string(),
+  category: z.enum(categoryEnum.enumValues),
+  severity: z.enum(severityEnum.enumValues),
+  affectedLocations: z.array(z.string()).min(1),
+  sourceProvider: z.string().min(1),
+  fetchedAt: z.string(),
+  coordinates: z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)]).optional(),
+});
+
+/** First [lng, lat] of a GeoJSON coordinates value (Point, or the first vertex of a Polygon or Line), or null. */
+export function firstPoint(coordinates: unknown): LngLat | null {
+  let c = coordinates;
+  while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+  if (!Array.isArray(c) || c.length < 2) return null;
+  const [lng, lat] = c;
+  return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
 }
 
 export interface DataFetchSummary {
   events: LiveRiskEvent[];
   fetchedAt: string;
-  sources: { name: string; count: number; ok: boolean }[];
+  sources: SourceSummary[];
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const RSS_FEEDS = [
+interface RssFeed {
+  url: string;
+  source: string;
+  /** Trade press: every item is already about shipping, so a disruption term alone is enough. */
+  maritime?: boolean;
+}
+
+const RSS_FEEDS: RssFeed[] = [
+  { url: "https://gcaptain.com/feed/", source: "gCaptain", maritime: true },
+  { url: "https://www.seatrade-maritime.com/rss.xml", source: "Seatrade Maritime", maritime: true },
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml", source: "BBC World" },
   { url: "https://www.aljazeera.com/xml/rss/all.xml", source: "Al Jazeera" },
   { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", source: "NYT World" },
@@ -44,35 +98,50 @@ const RSS_FEEDS = [
 // Keyword → affected location mapping for geo-tagging news items
 const GEO_DICT: Record<string, string[]> = {
   ukraine: ["Black Sea", "Odessa Port"],
-  russia: ["Baltic Sea", "Novorossiysk"],
+  novorossiysk: ["Novorossiysk", "Black Sea"],
+  "ust-luga": ["Baltic Sea"],
+  primorsk: ["Baltic Sea"],
   gaza: ["Suez Canal", "Eastern Mediterranean"],
   israel: ["Suez Canal", "Eastern Mediterranean"],
   iran: ["Strait of Hormuz", "Persian Gulf"],
   houthi: ["Bab-el-Mandeb", "Red Sea"],
   yemen: ["Bab-el-Mandeb", "Red Sea", "Gulf of Aden"],
   "red sea": ["Red Sea", "Bab-el-Mandeb"],
+  "black sea": ["Black Sea"],
+  hormuz: ["Strait of Hormuz", "Persian Gulf"],
+  "gulf of oman": ["Strait of Hormuz"],
+  baltic: ["Baltic Sea"],
+  malacca: ["Strait of Malacca"],
   "suez canal": ["Suez Canal", "Red Sea"],
   "strait of hormuz": ["Strait of Hormuz", "Persian Gulf"],
   "south china sea": ["South China Sea", "Strait of Malacca"],
   taiwan: ["Taiwan Strait", "South China Sea"],
-  china: ["South China Sea", "Port of Shanghai"],
   "panama canal": ["Panama Canal", "Caribbean Sea"],
   somalia: ["Gulf of Aden", "Horn of Africa"],
   piracy: ["Gulf of Aden", "Strait of Malacca"],
-  strike: ["Port Operations"],
-  "port strike": ["Port Operations"],
-  "dock workers": ["Port Operations"],
-  longshoremen: ["Port Operations"],
   hurricane: ["Gulf of Mexico", "Caribbean Sea"],
   typhoon: ["South China Sea", "Western Pacific"],
   cyclone: ["Bay of Bengal", "Indian Ocean"],
 };
 
-const CONFLICT_KEYWORDS = [
-  "attack", "strike", "missile", "drone", "war", "troops", "military",
-  "protest", "riot", "clash", "bomb", "killed", "forces", "blockade",
-  "sanctions", "seized", "vessel", "tanker", "cargo", "shipping", "port",
-  "disruption", "closure", "delay", "congestion", "piracy",
+// An RSS item must mention shipping AND a disruption. Conflict words alone match generic world news.
+const DISRUPTION_KEYWORDS = [
+  "attack", "strike", "missile", "drone", "war", "protest", "riot", "clash", "bomb", "killed",
+  "blockade", "sanctions", "seize", "seized", "hijack", "collision", "grounded", "closure", "closed",
+  "suspend", "halt", "shut", "disruption", "delay", "congestion", "backlog", "piracy",
+];
+
+/** An incident word in the headline itself is enough to count, even from a general-news feed. */
+const STRONG_INCIDENT_KEYWORDS = [
+  "attack", "missile", "drone", "seize", "seized", "hijack", "blockade", "collision", "grounded",
+  "aground", "sank", "sinking", "explosion", "piracy",
+];
+
+/** Headline words that mark market, corporate, or feature stories ("spot rates surge", "container shipping trial"). */
+const BUSINESS_KEYWORDS = [
+  "rates", "earnings", "profit", "quarter", "dividend", "stock", "shares", "contract", "orders", "delivery",
+  "newbuild", "charter", "auction", "appoints", "appointed", "ceo", "trial", "forecast", "outlook", "revenue",
+  "acquisition", "merger", "tender", "results",
 ];
 
 const SHIPPING_KEYWORDS = [
@@ -95,134 +164,188 @@ const COUNTRY_TO_REGIONS: Record<string, string[]> = {
   SD: ["Red Sea"],
 };
 
+/** Shown for a news item that names no place we can map. It cannot be placed relative to a route, so it scores 0. */
+export const UNLOCATED_LABEL = "Location unknown (not scored)";
+
+const termPatterns = new Map<string, RegExp>();
+
+const LABOR_TERMS = ["dock workers", "dockworkers", "longshoremen", "stevedores", "labor", "labour", "walkout", "work stoppage", "port strike", "trade union", "workers"];
+/** Unambiguous labor terms: these win even when the text also has military words. */
+const STRONG_LABOR_TERMS = ["dock workers", "dockworkers", "longshoremen", "stevedores", "walkout", "work stoppage", "port strike", "trade union"];
+const MILITARY_TERMS = ["attack", "missile", "drone", "war", "killed", "navy", "forces", "houthi", "airstrike", "targets", "troops", "military", "bomb", "iran", "israel"];
+
+/** A labor dispute, not a military strike: "Dock workers strike" yes, "Saudi Arabia strikes Houthi targets" no. */
+export function isLaborDispute(text: string): boolean {
+  if (STRONG_LABOR_TERMS.some((t) => hasTerm(text, t))) return true;
+  if (MILITARY_TERMS.some((t) => hasTerm(text, t))) return false; // "Houthi attack kills port workers" is not a labor dispute
+  return LABOR_TERMS.some((t) => hasTerm(text, t)) || hasTerm(text, "strike");
+}
+
+/** Inner text of an RSS element, across newlines, with any CDATA wrapper removed. Null if absent. */
+export function rssField(item: string, name: string): string | null {
+  const m = item.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i"));
+  return m ? m[1].replace(/^\s*<!\[CDATA\[/, "").replace(/\]\]>\s*$/, "") : null;
+}
+
+/**
+ * Feed text as safe plain text: tags removed, entities decoded, then any angle brackets the decoding
+ * produced removed too. Entity-encoded markup must not survive, because this text is stored and shown.
+ */
+export function plainText(raw: string): string {
+  return stripInvisible(decodeEntities(raw.replace(/<[^>]+>/g, "")))
+    .replace(/<[^>]*>/g, "")
+    .replace(/[<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Decodes the HTML entities feeds put in titles and descriptions. */
+export function decodeEntities(text: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  return text
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&([a-z]+);/gi, (m, name) => named[name.toLowerCase()] ?? m);
+}
+
+/** Whole-word match with simple plural and verb suffixes, so "war" does not match "award". */
+export function hasTerm(text: string, term: string): boolean {
+  let re = termPatterns.get(term);
+  if (!re) {
+    re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:s|es|ed|ing)?\\b`);
+    termPatterns.set(term, re);
+  }
+  return re.test(text);
+}
+
 // ── 1. RSS OSINT Fetcher ──────────────────────────────────────────────────────
 
-async function fetchRssOsint(): Promise<{ events: LiveRiskEvent[]; count: number; ok: boolean }> {
+async function fetchRssFeed(feed: RssFeed): Promise<{ events: LiveRiskEvent[]; ok: boolean }> {
   const events: LiveRiskEvent[] = [];
   let ok = false;
 
-  for (const feed of RSS_FEEDS) {
-    try {
-      const res = await fetch(feed.url, {
-        signal: AbortSignal.timeout(6000),
-        headers: { "User-Agent": "RiskWise/2.0 Supply Chain Intelligence" },
-      });
-      if (!res.ok) continue;
-      const xml = await res.text();
+  try {
+    const res = await fetch(feed.url, {
+      signal: AbortSignal.timeout(6000),
+      headers: { "User-Agent": "RiskWise/2.0 Supply Chain Intelligence" },
+    });
+    if (!res.ok) return { events, ok };
+    const xml = await res.text();
+    ok = true; // feed responded; zero relevant items is still a healthy feed
 
-      const items = xml.match(/<item>([\s\S]*?)<\/item>/gi) || [];
+    const items = xml.match(/<item>([\s\S]*?)<\/item>/gi) || [];
 
-      for (const item of items.slice(0, 30)) {
-        const titleMatch =
-          item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/i) ||
-          item.match(/<title>(.*?)<\/title>/i);
-        const linkMatch = item.match(/<link>(.*?)<\/link>/i);
-        const descMatch =
-          item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/i) ||
-          item.match(/<description>(.*?)<\/description>/i);
+    for (const item of items.slice(0, 30)) {
+      const titleField = rssField(item, "title");
+      if (!titleField) continue;
 
-        if (!titleMatch) continue;
+      const title = plainText(titleField);
+      const link = rssField(item, "link")?.trim() ?? "";
+      const rawDesc = plainText(rssField(item, "description") ?? "");
+      const textToSearch = (title + " " + rawDesc).toLowerCase();
 
-        const title = titleMatch[1].replace(/<[^>]+>/g, "").trim();
-        const link = linkMatch?.[1]?.trim() ?? "";
-        const rawDesc = descMatch ? descMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-        const textToSearch = (title + " " + rawDesc).toLowerCase();
+      const headline = title.toLowerCase();
+      const aboutShipping = feed.maritime || SHIPPING_KEYWORDS.some((kw) => hasTerm(textToSearch, kw));
+      const incidentInHeadline = STRONG_INCIDENT_KEYWORDS.some((kw) => hasTerm(headline, kw));
+      const businessHeadline = BUSINESS_KEYWORDS.some((kw) => hasTerm(headline, kw));
+      const disruptive = DISRUPTION_KEYWORDS.some((kw) => hasTerm(textToSearch, kw));
+      // A strong incident in the headline wins; otherwise a disruption word counts unless the headline is a market or feature story.
+      const isRelevant = aboutShipping && (incidentInHeadline || (disruptive && !businessHeadline));
+      if (!isRelevant) continue;
 
-        const isRelevant =
-          CONFLICT_KEYWORDS.some((kw) => textToSearch.includes(kw)) ||
-          SHIPPING_KEYWORDS.some((kw) => textToSearch.includes(kw));
-        if (!isRelevant) continue;
-
-        // Determine affected locations from geo-dict
-        const affectedLocations: string[] = [];
-        for (const [keyword, locations] of Object.entries(GEO_DICT)) {
-          if (textToSearch.includes(keyword)) {
-            for (const loc of locations) {
-              if (!affectedLocations.includes(loc)) affectedLocations.push(loc);
-            }
+      // Determine affected locations from geo-dict
+      const affectedLocations: string[] = [];
+      for (const [keyword, locations] of Object.entries(GEO_DICT)) {
+        if (hasTerm(textToSearch, keyword)) {
+          for (const loc of locations) {
+            if (!affectedLocations.includes(loc)) affectedLocations.push(loc);
           }
         }
-        if (affectedLocations.length === 0) affectedLocations.push("Global Shipping Lanes");
-
-        // Classify category
-        let category: LiveRiskEvent["category"] = "Geopolitical";
-        if (
-          textToSearch.includes("strike") ||
-          textToSearch.includes("dock") ||
-          textToSearch.includes("longshoremen") ||
-          textToSearch.includes("labor") ||
-          textToSearch.includes("labour") ||
-          textToSearch.includes("union")
-        ) {
-          category = "Strike";
-        } else if (
-          textToSearch.includes("hurricane") ||
-          textToSearch.includes("typhoon") ||
-          textToSearch.includes("cyclone") ||
-          textToSearch.includes("storm") ||
-          textToSearch.includes("flood") ||
-          textToSearch.includes("weather")
-        ) {
-          category = "Weather";
-        } else if (
-          textToSearch.includes("congestion") ||
-          textToSearch.includes("backlog") ||
-          textToSearch.includes("queue") ||
-          textToSearch.includes("delay") ||
-          textToSearch.includes("port closure")
-        ) {
-          category = "Port Congestion";
-        }
-
-        // Classify severity
-        let severity: LiveRiskEvent["severity"] = "Medium";
-        if (
-          textToSearch.includes("critical") ||
-          textToSearch.includes("catastrophic") ||
-          textToSearch.includes("closure") ||
-          textToSearch.includes("blockade") ||
-          textToSearch.includes("seized") ||
-          textToSearch.includes("attack")
-        ) {
-          severity = "Critical";
-        } else if (
-          textToSearch.includes("high") ||
-          textToSearch.includes("major") ||
-          textToSearch.includes("severe") ||
-          textToSearch.includes("significant")
-        ) {
-          severity = "High";
-        } else if (textToSearch.includes("minor") || textToSearch.includes("low")) {
-          severity = "Low";
-        }
-
-        const description =
-          rawDesc.length > 20
-            ? rawDesc.slice(0, 280) + (rawDesc.length > 280 ? "..." : "")
-            : `${feed.source} reports: ${title}`;
-
-        events.push({
-          title: title.slice(0, 200),
-          description,
-          category,
-          severity,
-          affectedLocations,
-          sourceUrl: link,
-          sourceProvider: feed.source,
-          fetchedAt: new Date().toISOString(),
-        });
-
-        ok = true;
       }
-    } catch (e) {
-      log.warn({ err: e instanceof Error ? e.message : e, source: feed.source }, `RSS fetch failed for ${feed.source}`);
+      // Name a supported port when the text mentions its city, so strike and congestion news can be placed.
+      for (const portName of PORT_NAMES) {
+        const city = portName.replace(/^Port of /, "").toLowerCase();
+        if (hasTerm(textToSearch, city) && !affectedLocations.includes(portName)) affectedLocations.push(portName);
+      }
+      if (affectedLocations.length === 0) affectedLocations.push(UNLOCATED_LABEL);
+
+      // Classify category
+      let category: LiveRiskEvent["category"] = "Geopolitical";
+      if (isLaborDispute(textToSearch)) {
+        category = "Strike";
+      } else if (
+        hasTerm(textToSearch, "hurricane") ||
+        hasTerm(textToSearch, "typhoon") ||
+        hasTerm(textToSearch, "cyclone") ||
+        hasTerm(textToSearch, "storm") ||
+        hasTerm(textToSearch, "flood") ||
+        hasTerm(textToSearch, "weather")
+      ) {
+        category = "Weather";
+      } else if (
+        hasTerm(textToSearch, "congestion") ||
+        hasTerm(textToSearch, "backlog") ||
+        hasTerm(textToSearch, "queue") ||
+        hasTerm(textToSearch, "delay") ||
+        hasTerm(textToSearch, "port closure")
+      ) {
+        category = "Port Congestion";
+      }
+
+      // Classify severity
+      let severity: LiveRiskEvent["severity"] = "Medium";
+      if (
+        hasTerm(textToSearch, "critical") ||
+        hasTerm(textToSearch, "catastrophic") ||
+        hasTerm(textToSearch, "closure") ||
+        hasTerm(textToSearch, "blockade") ||
+        hasTerm(textToSearch, "seized") ||
+        hasTerm(textToSearch, "attack")
+      ) {
+        severity = "Critical";
+      } else if (
+        hasTerm(textToSearch, "high") ||
+        hasTerm(textToSearch, "major") ||
+        hasTerm(textToSearch, "severe") ||
+        hasTerm(textToSearch, "significant")
+      ) {
+        severity = "High";
+      } else if (hasTerm(textToSearch, "minor") || hasTerm(textToSearch, "low")) {
+        severity = "Low";
+      }
+
+      const description =
+        rawDesc.length > 20
+          ? rawDesc.slice(0, 280) + (rawDesc.length > 280 ? "..." : "")
+          : `${feed.source} reports: ${title}`;
+
+      events.push({
+        title: title.slice(0, 200),
+        description,
+        category,
+        severity,
+        affectedLocations,
+        sourceUrl: link,
+        sourceProvider: feed.source,
+        fetchedAt: new Date().toISOString(),
+      });
     }
+  } catch (e) {
+    log.warn({ err: e instanceof Error ? e.message : e, source: feed.source }, `RSS fetch failed for ${feed.source}`);
   }
 
-  return { events, count: events.length, ok };
+  return { events, ok };
+}
+
+async function fetchRssOsint(): Promise<FetcherResult> {
+  const results = await Promise.all(RSS_FEEDS.map(fetchRssFeed));
+  const events = results.flatMap((r) => r.events);
+  return { events, count: events.length, ok: results.some((r) => r.ok) };
 }
 
 // ── 2. NASA EONET Weather Fetcher ─────────────────────────────────────────────
+
+const EONET_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const EONET_CATEGORY_TO_LOCATIONS: Record<string, string[]> = {
   severeStorms: ["Open Ocean", "Coastal Waters"],
@@ -231,7 +354,7 @@ const EONET_CATEGORY_TO_LOCATIONS: Record<string, string[]> = {
   floods: ["River Ports", "Coastal Regions"],
 };
 
-async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: number; ok: boolean }> {
+async function fetchNasaEonet(): Promise<FetcherResult> {
   const events: LiveRiskEvent[] = [];
   try {
     const res = await fetch("https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50&days=7", {
@@ -248,6 +371,9 @@ async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: numbe
 
       const geom = event.geometry?.at(-1);
       if (!geom?.coordinates) continue;
+      // EONET keeps long-finished events "open"; only the latest observation date tells.
+      const observedAt = Date.parse(geom.date ?? "");
+      if (!Number.isFinite(observedAt) || Date.now() - observedAt > EONET_MAX_AGE_MS) continue;
 
       let severity: LiveRiskEvent["severity"] = "Medium";
       let affectedLocations = EONET_CATEGORY_TO_LOCATIONS[categoryId] ?? ["Open Ocean"];
@@ -258,11 +384,10 @@ async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: numbe
       else if (categoryId === "seaIce") severity = "Medium";
 
       // Try to geo-tag by coordinates
-      const [lng, lat] = Array.isArray(geom.coordinates[0])
-        ? geom.coordinates[0]
-        : geom.coordinates;
+      const point = firstPoint(geom.coordinates);
+      const [lng, lat] = point ?? [NaN, NaN];
 
-      if (typeof lat === "number" && typeof lng === "number") {
+      if (point) {
         // Rough region tagging by coordinate ranges
         if (lat > 0 && lat < 30 && lng > 40 && lng < 80) affectedLocations = ["Arabian Sea", "Indian Ocean"];
         else if (lat > -10 && lat < 25 && lng > 95 && lng < 130) affectedLocations = ["South China Sea", "Bay of Bengal"];
@@ -280,6 +405,7 @@ async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: numbe
         sourceUrl: event.sources?.[0]?.url ?? "https://eonet.gsfc.nasa.gov",
         sourceProvider: "NASA EONET",
         fetchedAt: new Date().toISOString(),
+        coordinates: point ?? undefined,
       });
     }
 
@@ -292,7 +418,7 @@ async function fetchNasaEonet(): Promise<{ events: LiveRiskEvent[]; count: numbe
 
 // ── 3. USGS Earthquake Fetcher ────────────────────────────────────────────────
 
-async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count: number; ok: boolean }> {
+async function fetchUsgsEarthquakes(): Promise<FetcherResult> {
   const events: LiveRiskEvent[] = [];
   try {
     const res = await fetch(
@@ -309,7 +435,9 @@ async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count:
       if (mag < 5.0) continue; // Only significant quakes
 
       const place: string = props?.place ?? "Unknown region";
-      const [lng, lat] = feature.geometry?.coordinates ?? [0, 0];
+      const point = firstPoint(feature.geometry?.coordinates);
+      if (!point) continue; // no usable location: skip rather than guess [0, 0]
+      const [lng, lat] = point;
 
       // Determine affected shipping locations by coordinate proximity
       let affectedLocations: string[] = ["Regional Shipping Lanes"];
@@ -324,7 +452,7 @@ async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count:
         mag >= 7.0 ? "Critical" : mag >= 6.0 ? "High" : "Medium";
 
       events.push({
-        title: `M${mag.toFixed(1)} Earthquake — ${place}`,
+        title: `M${mag.toFixed(1)} Earthquake: ${place}`,
         description: `USGS reports a magnitude ${mag.toFixed(1)} earthquake near ${place}. Potential impact on nearby port infrastructure and coastal shipping operations. Tsunami advisory status should be monitored.`,
         category: "Weather",
         severity,
@@ -332,6 +460,7 @@ async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count:
         sourceUrl: props?.url ?? "https://earthquake.usgs.gov",
         sourceProvider: "USGS Earthquake Hazards",
         fetchedAt: new Date().toISOString(),
+        coordinates: point,
       });
     }
 
@@ -342,7 +471,7 @@ async function fetchUsgsEarthquakes(): Promise<{ events: LiveRiskEvent[]; count:
   }
 }
 
-// ── 4. Country Risk Enrichment ────────────────────────────────────────────────
+// ── 4. Country risk baseline (static, hand-maintained, not a live feed) ──────
 
 const COUNTRY_RISK_BASE: Record<string, { base: number; tags: string[]; name: string }> = {
   UA: { base: 85, tags: ["active_conflict", "infrastructure_damage"], name: "Ukraine" },
@@ -357,7 +486,7 @@ const COUNTRY_RISK_BASE: Record<string, { base: number; tags: string[]; name: st
   SD: { base: 84, tags: ["active_conflict", "humanitarian_crisis"], name: "Sudan" },
 };
 
-async function fetchCountryRiskEvents(): Promise<{ events: LiveRiskEvent[]; count: number; ok: boolean }> {
+async function fetchCountryRiskEvents(): Promise<FetcherResult> {
   const events: LiveRiskEvent[] = [];
 
   // Only emit country risk events for HIGH/CRITICAL countries that affect shipping
@@ -378,7 +507,7 @@ async function fetchCountryRiskEvents(): Promise<{ events: LiveRiskEvent[]; coun
       severity,
       affectedLocations: regions,
       sourceUrl: "https://github.com/simplifaisoul/osiris",
-      sourceProvider: "Osiris Country Risk Index",
+      sourceProvider: BASELINE_PROVIDER,
       fetchedAt: new Date().toISOString(),
     });
   }
@@ -388,50 +517,78 @@ async function fetchCountryRiskEvents(): Promise<{ events: LiveRiskEvent[]; coun
 
 // ── Master Fetch Function ─────────────────────────────────────────────────────
 
-/**
- * Fetch all real-time intelligence from all sources in parallel.
- * Returns a deduplicated, normalised list of LiveRiskEvent objects
- * along with a per-source summary for transparency display.
- */
-export async function fetchAllRealTimeIntelligence(): Promise<DataFetchSummary> {
-  const fetchedAt = new Date().toISOString();
+const FEED_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEVERITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
-  const [rssResult, eonetResult, usgsResult, countryResult] = await Promise.allSettled([
-    fetchRssOsint(),
-    fetchNasaEonet(),
-    fetchUsgsEarthquakes(),
-    fetchCountryRiskEvents(),
+let cached: { at: number; value: DataFetchSummary } | null = null;
+let inFlight: Promise<DataFetchSummary> | null = null;
+let generation = 0; // bumped on clear so a fetch started before it cannot repopulate the cache
+
+export function clearFeedCache(): void {
+  cached = null;
+  inFlight = null;
+  generation++;
+}
+
+async function timed(name: string, kind: SourceKind, fn: () => Promise<FetcherResult>) {
+  const start = Date.now();
+  const result = await fn().catch((): FetcherResult => ({ events: [], count: 0, ok: false }));
+  const summary: SourceSummary = { name, count: result.count, ok: result.ok, kind, latencyMs: Date.now() - start };
+  return { events: result.events, summary };
+}
+
+async function fetchFresh(): Promise<DataFetchSummary> {
+  const fetchedAt = new Date().toISOString();
+  const results = await Promise.all([
+    timed("RSS news (maritime press + BBC/AJZ/NYT)", "live", fetchRssOsint),
+    timed("NASA EONET", "live", fetchNasaEonet),
+    timed("USGS Earthquakes", "live", fetchUsgsEarthquakes),
+    timed("Country Risk Baseline (static)", "baseline", fetchCountryRiskEvents),
   ]);
 
-  const rss = rssResult.status === "fulfilled" ? rssResult.value : { events: [], count: 0, ok: false };
-  const eonet = eonetResult.status === "fulfilled" ? eonetResult.value : { events: [], count: 0, ok: false };
-  const usgs = usgsResult.status === "fulfilled" ? usgsResult.value : { events: [], count: 0, ok: false };
-  const country = countryResult.status === "fulfilled" ? countryResult.value : { events: [], count: 0, ok: false };
-
-  // Merge and deduplicate by title similarity (simple prefix check)
-  const allEvents = [...rss.events, ...eonet.events, ...usgs.events, ...country.events];
+  // Drop events that fail the schema, then dedupe by title prefix
   const seen = new Set<string>();
-  const deduped: LiveRiskEvent[] = [];
-  for (const event of allEvents) {
-    const key = event.title.toLowerCase().slice(0, 60);
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(event);
+  const events: LiveRiskEvent[] = [];
+  for (const event of results.flatMap((r) => r.events)) {
+    if (!liveEventSchema.safeParse(event).success) {
+      log.warn({ title: event.title, provider: event.sourceProvider }, "Dropped event failing schema");
+      continue;
     }
+    const key = event.title.toLowerCase().slice(0, 60);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    events.push(event);
   }
-
-  // Sort: Critical first, then High, then by source
-  const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
-  deduped.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  events.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 
   return {
-    events: deduped.slice(0, 30), // Cap at 30 events
+    events: events.slice(0, 30),
     fetchedAt,
-    sources: [
-      { name: "RSS OSINT (BBC/AJZ/NYT)", count: rss.count, ok: rss.ok },
-      { name: "NASA EONET", count: eonet.count, ok: eonet.ok },
-      { name: "USGS Earthquakes", count: usgs.count, ok: usgs.ok },
-      { name: "Osiris Country Risk", count: country.count, ok: country.ok },
-    ],
+    sources: results.map((r) => r.summary),
   };
+}
+
+/**
+ * Fetch all sources in parallel. Results are cached for FEED_CACHE_TTL_MS (feeds update
+ * slowly and every evaluation would otherwise hit five remote hosts), and concurrent
+ * callers share one in-flight fetch. A fetch where every live source failed is not cached.
+ * `force` bypasses the cache (used by the measurement script).
+ */
+export async function fetchAllRealTimeIntelligence(opts: { force?: boolean } = {}): Promise<DataFetchSummary> {
+  if (!opts.force && cached && Date.now() - cached.at < FEED_CACHE_TTL_MS) return cached.value;
+  if (!opts.force && inFlight) return inFlight;
+
+  const startedIn = generation;
+  const pending = fetchFresh()
+    .then((value) => {
+      if (startedIn === generation && value.sources.some((s) => s.kind === "live" && s.ok)) {
+        cached = { at: Date.now(), value };
+      }
+      return value;
+    })
+    .finally(() => {
+      if (inFlight === pending) inFlight = null;
+    });
+  if (!opts.force) inFlight = pending;
+  return pending;
 }

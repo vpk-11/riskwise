@@ -1,16 +1,41 @@
 /**
  * RiskWise Multi-Agent Orchestration
  *
- * Three specialized LLM agents:
- *   Athena  – The Researcher: scans disruptions and extracts intelligence
- *   Hermes  – The Risk Modeler: calculates risk scores for routes
- *   Apollo  – The Route Optimizer: generates alternative routes when risk > 50
+ * The risk score is computed in code (see scoring.ts), never by an LLM.
+ *   Athena  – The Researcher: gathers live events, finds those near the route, summarizes them
+ *   Hermes  – The Risk Modeler: explains the computed score (narrative only)
+ *   Apollo  – The Route Optimizer: suggests alternative corridors in words when score > 50
+ *
+ * The LLM only writes prose. If it is down, the score and breakdown still return,
+ * with a templated narrative.
  */
 
+import { z } from "zod";
 import { invokeLLM, type LLMConfig } from "./_core/llm";
 import { ENV } from "./_core/env";
-import { createLogger, logAgentTelemetry, logAthenaScan, logRouteEvaluation } from "./_core/logger";
-import { fetchAllRealTimeIntelligence, type LiveRiskEvent } from "./realtime";
+import { createLogger, logAgentTelemetry, logRouteEvaluation } from "./_core/logger";
+import {
+  BASELINE_PROVIDER,
+  fetchAllRealTimeIntelligence,
+  type DataFetchSummary,
+  type LiveRiskEvent,
+} from "./realtime";
+import { buildRoute, type RouteGeometry } from "@shared/geo";
+import { eventsBlock, sanitizeForPrompt, UNTRUSTED_NOTE } from "./promptSafety";
+import { runApollo, type AlternativeRoute } from "./apollo";
+import {
+  scoreRoute,
+  transitDays,
+  type Category,
+  type Driver,
+  type Factor,
+  type RiskScore,
+  type ScorableEvent,
+  type Severity,
+} from "./scoring";
+
+const REROUTE_THRESHOLD = 50;
+const NO_REROUTE = "Route risk is within acceptable parameters. No rerouting required.";
 
 // ── Per-agent LLM configs (fall back to global if not set) ───────────────────
 
@@ -32,11 +57,8 @@ const apolloConfig: LLMConfig = {
   model: ENV.RISKWISE_APOLLO_LLM_MODEL,
 };
 
-// ── Per-agent loggers ─────────────────────────────────────────────────────────
-
 const athenaLog = createLogger("athena");
 const hermesLog = createLogger("hermes");
-const apolloLog = createLogger("apollo");
 const orchestratorLog = createLogger("orchestrator");
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -48,37 +70,12 @@ export interface RiskBreakdown {
   congestion: number;
 }
 
-export interface AlternativeRoute {
-  name: string;
-  transitDays: number;
-  riskScore: number;
-  waypoints: [number, number][];
-  costImpact: string;
-  description: string;
-}
-
-export interface AthenaResult {
-  relevantDisruptions: {
-    title: string;
-    category: string;
-    severity: string;
-    affectedLocations: string[];
-    impactSummary: string;
-  }[];
-  intelligenceSummary: string;
-}
-
-export interface HermesResult {
-  overallRiskScore: number;
-  primaryRiskFactor: string;
-  breakdown: RiskBreakdown;
-  riskNarrative: string;
-  baseTransitDays: number;
-}
-
-export interface ApolloResult {
-  alternativeRoutes: AlternativeRoute[];
-  recommendation: string;
+export interface DbEvent {
+  title: string;
+  category: Category;
+  severity: Severity;
+  affectedLocations: string[];
+  coordinates?: [number, number];
 }
 
 export interface OrchestrationResult {
@@ -88,131 +85,127 @@ export interface OrchestrationResult {
   baseTransitDays: number;
   riskNarrative: string;
   intelligenceSummary: string;
-  dataSources: { name: string; count: number; ok: boolean }[];
+  /** True when an LLM call failed and templated text stands in for it. The score is unaffected. */
+  llmDegraded: boolean;
+  dataSources: DataFetchSummary["sources"];
+  drivers: Driver[];
+  /** Static country-risk entries near the route. Shown as context, never part of the score. */
+  baselineContext: Driver[];
+  /** Computed on the model sea-lane graph, never produced by the LLM. Empty when none is safer than the direct route. */
   alternativeRoutes: AlternativeRoute[];
   recommendation: string;
   baseRouteWaypoints: [number, number][];
 }
 
+/** Thrown when no live source answered and the DB has no recent live events. */
+export class NoLiveDataError extends Error {
+  constructor() {
+    super("No live intelligence available: every live feed failed and no recent live events are stored.");
+    this.name = "NoLiveDataError";
+  }
+}
+
+// ── Prompt helpers ────────────────────────────────────────────────────────────
+
+async function callAgent<T>(opts: {
+  agent: "athena" | "hermes";
+  config: LLMConfig;
+  system: string;
+  user: string;
+  schemaName: string;
+  schema: Record<string, unknown>;
+  /** Validates the parsed JSON. A model that ignores the JSON schema throws here and takes the degraded path. */
+  validate: z.ZodType<T>;
+  route: { origin: string; destination: string };
+}): Promise<T> {
+  const start = Date.now();
+  try {
+    const response = await invokeLLM(
+      {
+        messages: [
+          { role: "system", content: opts.system },
+          { role: "user", content: opts.user },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: opts.schemaName, strict: true, schema: opts.schema },
+        },
+      },
+      opts.config,
+    );
+    const parsed = opts.validate.parse(JSON.parse(String(response.choices[0]?.message?.content ?? "{}")));
+    logAgentTelemetry({
+      agent: opts.agent,
+      model: response._model,
+      latencyMs: response._latencyMs,
+      promptTokens: response.usage?.prompt_tokens,
+      completionTokens: response.usage?.completion_tokens,
+      totalTokens: response.usage?.total_tokens,
+      success: true,
+      route: opts.route,
+    });
+    return parsed;
+  } catch (err) {
+    logAgentTelemetry({
+      agent: opts.agent,
+      model: opts.config.model ?? ENV.RISKWISE_LLM_MODEL,
+      latencyMs: Date.now() - start,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      route: opts.route,
+    });
+    throw err;
+  }
+}
+
+const nonEmpty = z.string().trim().min(1);
+const athenaOut = z.object({ intelligenceSummary: nonEmpty });
+const hermesOut = z.object({ riskNarrative: nonEmpty });
+
+const stringSchema = (key: string) => ({
+  type: "object",
+  properties: { [key]: { type: "string" } },
+  required: [key],
+  additionalProperties: false,
+});
+
 // ── Agent Athena – The Researcher ─────────────────────────────────────────────
+
+/** `degraded` is true only when an LLM call was attempted and failed; skipping the call for an empty result is not degraded. */
+export interface AgentText {
+  text: string;
+  degraded: boolean;
+}
 
 export async function runAthena(
   origin: string,
   destination: string,
-  activeDisruptions: { title: string; category: string; severity: string; affectedLocations: string[]; description: string }[]
-): Promise<AthenaResult> {
-  // Fetch real-time intelligence from live sources (RSS, NASA EONET, USGS, Country Risk)
-  let liveEvents: LiveRiskEvent[] = [];
-  let liveSourceSummary = "";
-  try {
-    const liveData = await fetchAllRealTimeIntelligence();
-    liveEvents = liveData.events;
-    const successfulSources = liveData.sources.filter((s) => s.ok).map((s) => `${s.name} (${s.count} events)`);
-    liveSourceSummary = successfulSources.length > 0
-      ? `Live intelligence fetched from: ${successfulSources.join(", ")} as of ${liveData.fetchedAt}`
-      : "Live intelligence sources unavailable — using database events only.";
-    athenaLog.info(
-      { eventCount: liveEvents.length, sourceCount: successfulSources.length, route: { origin, destination } },
-      `Live data fetched: ${liveEvents.length} events from ${successfulSources.length} sources`,
-    );
-  } catch (e) {
-    athenaLog.warn({ err: e, route: { origin, destination } }, "Real-time fetch failed, falling back to DB events");
+  route: RouteGeometry,
+  score: RiskScore,
+): Promise<AgentText> {
+  if (score.drivers.length === 0) {
+    return { text: `No live events were found within range of the ${origin} to ${destination} route.`, degraded: false };
   }
-
-  // Merge live events with DB events (live events take priority)
-  const mergedDisruptions = [
-    ...liveEvents.map((e) => ({
-      title: e.title,
-      category: e.category,
-      severity: e.severity,
-      affectedLocations: e.affectedLocations,
-      description: `[${e.sourceProvider}] ${e.description}`,
-    })),
-    ...activeDisruptions.slice(0, 10), // Keep up to 10 DB events as supplementary context
-  ].slice(0, 30); // Cap total context at 30 events
-
-  const disruptionContext = mergedDisruptions
-    .map((d) => `- [${d.severity}] ${d.title} (${d.category}): affects ${d.affectedLocations.join(", ")}\n  ${d.description.slice(0, 200)}`)
-    .join("\n");
-
-  athenaLog.debug({ route: { origin, destination } }, "Invoking LLM for intelligence analysis");
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are Athena, the logistics intelligence researcher for RiskWise. Your goal is to analyze real-world trade disruptions and identify which ones are relevant to a given shipping route. You extract key intelligence about port disruptions, geopolitical events, weather anomalies, and labor strikes that could impact the route. Always respond with valid JSON only.`,
-      },
-      {
-        role: "user",
-        content: `Analyze the shipping route from ${origin} to ${destination}.
-
-${liveSourceSummary}
-
-Current active global disruptions (merged from live sources + database):
-${disruptionContext || "No disruptions currently in the database."}
-
-Identify which disruptions are relevant to this route and provide an intelligence summary. Consider the typical geographic path between these ports. Note which events come from live news sources vs. database records.
-
-Respond with JSON in this exact format:
-{
-  "relevantDisruptions": [
-    {
-      "title": "string",
-      "category": "string",
-      "severity": "string",
-      "affectedLocations": ["string"],
-      "impactSummary": "string - how this specifically affects the route"
-    }
-  ],
-  "intelligenceSummary": "string - 2-3 sentence overview of the threat landscape for this route"
-}`,
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "athena_result",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            relevantDisruptions: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  title: { type: "string" },
-                  category: { type: "string" },
-                  severity: { type: "string" },
-                  affectedLocations: { type: "array", items: { type: "string" } },
-                  impactSummary: { type: "string" },
-                },
-                required: ["title", "category", "severity", "affectedLocations", "impactSummary"],
-                additionalProperties: false,
-              },
-            },
-            intelligenceSummary: { type: "string" },
-          },
-          required: ["relevantDisruptions", "intelligenceSummary"],
-          additionalProperties: false,
-        },
-      },
-    },
-  }, athenaConfig);
-
-  logAgentTelemetry({
-    agent: "athena",
-    model: response._model,
-    latencyMs: response._latencyMs,
-    promptTokens: response.usage?.prompt_tokens,
-    completionTokens: response.usage?.completion_tokens,
-    totalTokens: response.usage?.total_tokens,
-    success: true,
-    route: { origin, destination },
-  });
-
-  const content = String(response.choices[0]?.message?.content ?? "{}");
-  return JSON.parse(content) as AthenaResult;
+  try {
+    const { intelligenceSummary } = await callAgent<{ intelligenceSummary: string }>({
+      agent: "athena",
+      config: athenaConfig,
+      system:
+        "You are Athena, the logistics intelligence researcher for RiskWise. Summarize the threat landscape for a shipping route in 2-3 sentences using only the events provided. Do not invent events. Respond with valid JSON only.",
+      user: `Route: ${origin} to ${destination}, passing ${route.via.join(", ")}.\n${UNTRUSTED_NOTE}\n${eventsBlock(score.drivers)}`,
+      schemaName: "athena_summary",
+      schema: stringSchema("intelligenceSummary"),
+      validate: athenaOut,
+      route: { origin, destination },
+    });
+    return { text: intelligenceSummary, degraded: false };
+  } catch (err) {
+    athenaLog.warn({ err }, "Athena summary failed, using template");
+    return {
+      text: `${score.drivers.length} live event(s) near the route. Closest: ${sanitizeForPrompt(score.drivers[0].title)} (${score.drivers[0].distanceKm} km).`,
+      degraded: true,
+    };
+  }
 }
 
 // ── Agent Hermes – The Risk Modeler ──────────────────────────────────────────
@@ -220,415 +213,138 @@ Respond with JSON in this exact format:
 export async function runHermes(
   origin: string,
   destination: string,
-  athenaResult: AthenaResult
-): Promise<HermesResult> {
-  hermesLog.debug(
-    { route: { origin, destination }, disruptionCount: athenaResult.relevantDisruptions.length },
-    "Invoking LLM for risk scoring",
-  );
-
-  const disruptionContext = athenaResult.relevantDisruptions
-    .map((d) => `- [${d.severity}] ${d.title}: ${d.impactSummary}`)
-    .join("\n");
-
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are Hermes, the mathematical risk analyst for RiskWise. Your goal is to calculate a unified Risk Score (0-100) for a shipping route based on active disruptions, historical patterns, and geographic risk factors. You break down risk into four categories: weather (0-100), labor/strikes (0-100), geopolitical (0-100), and port congestion (0-100). The overall score is a weighted average. Always respond with valid JSON only.`,
-      },
-      {
-        role: "user",
-        content: `Calculate the risk score for the shipping route from ${origin} to ${destination}.
-
-Intelligence from Agent Athena:
-Summary: ${athenaResult.intelligenceSummary}
-
-Relevant disruptions:
-${disruptionContext || "No major disruptions identified for this route."}
-
-Calculate:
-1. Individual risk scores for weather, labor, geopolitical, and congestion (0-100 each)
-2. Overall risk score (0-100) as weighted average
-3. Primary risk factor (the single biggest threat)
-4. Estimated base transit days for this route
-5. A brief risk narrative
-
-Respond with JSON in this exact format:
-{
-  "overallRiskScore": number,
-  "primaryRiskFactor": "string",
-  "breakdown": {
-    "weather": number,
-    "labor": number,
-    "geopolitical": number,
-    "congestion": number
-  },
-  "riskNarrative": "string",
-  "baseTransitDays": number
-}`,
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "hermes_result",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            overallRiskScore: { type: "number" },
-            primaryRiskFactor: { type: "string" },
-            breakdown: {
-              type: "object",
-              properties: {
-                weather: { type: "number" },
-                labor: { type: "number" },
-                geopolitical: { type: "number" },
-                congestion: { type: "number" },
-              },
-              required: ["weather", "labor", "geopolitical", "congestion"],
-              additionalProperties: false,
-            },
-            riskNarrative: { type: "string" },
-            baseTransitDays: { type: "number" },
-          },
-          required: ["overallRiskScore", "primaryRiskFactor", "breakdown", "riskNarrative", "baseTransitDays"],
-          additionalProperties: false,
-        },
-      },
-    },
-  }, hermesConfig);
-
-  logAgentTelemetry({
-    agent: "hermes",
-    model: response._model,
-    latencyMs: response._latencyMs,
-    promptTokens: response.usage?.prompt_tokens,
-    completionTokens: response.usage?.completion_tokens,
-    totalTokens: response.usage?.total_tokens,
-    success: true,
-    route: { origin, destination },
-  });
-
-  const content = String(response.choices[0]?.message?.content ?? "{}");
-  return JSON.parse(content) as HermesResult;
-}
-
-// ── Agent Apollo – The Route Optimizer ───────────────────────────────────────
-
-export async function runApollo(
-  origin: string,
-  destination: string,
-  hermesResult: HermesResult
-): Promise<ApolloResult> {
-  apolloLog.debug(
-    { route: { origin, destination }, riskScore: hermesResult.overallRiskScore },
-    "Invoking LLM for route optimization",
-  );
-
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are Apollo, the logistics route optimizer for RiskWise. When Hermes flags a route with a Risk Score above 50, you calculate alternative routes with lower risk. You output routes with approximate waypoint coordinates (longitude, latitude pairs) and cost-benefit analysis. Always respond with valid JSON only. Coordinates must be realistic geographic positions on actual ocean shipping lanes.`,
-      },
-      {
-        role: "user",
-        content: `The route from ${origin} to ${destination} has been flagged with a Risk Score of ${hermesResult.overallRiskScore}/100.
-
-Primary risk factor: ${hermesResult.primaryRiskFactor}
-Base transit days: ${hermesResult.baseTransitDays}
-
-Generate 2 alternative routes that avoid the primary risk areas. For each route:
-1. Provide a descriptive name
-2. Estimated transit days
-3. Estimated risk score (should be lower than ${hermesResult.overallRiskScore})
-4. Approximate waypoints as [longitude, latitude] pairs (6-12 points along realistic ocean shipping lanes)
-5. Cost impact description (e.g., "+$45,000 fuel surcharge, +10 days")
-6. Brief description of why this route is safer
-
-Respond with JSON in this exact format:
-{
-  "alternativeRoutes": [
-    {
-      "name": "string",
-      "transitDays": number,
-      "riskScore": number,
-      "waypoints": [[number, number]],
-      "costImpact": "string",
-      "description": "string"
-    }
-  ],
-  "recommendation": "string - which route Apollo recommends and why"
-}`,
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "apollo_result",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            alternativeRoutes: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  name: { type: "string" },
-                  transitDays: { type: "number" },
-                  riskScore: { type: "number" },
-                  waypoints: { type: "array", items: { type: "array", items: { type: "number" } } },
-                  costImpact: { type: "string" },
-                  description: { type: "string" },
-                },
-                required: ["name", "transitDays", "riskScore", "waypoints", "costImpact", "description"],
-                additionalProperties: false,
-              },
-            },
-            recommendation: { type: "string" },
-          },
-          required: ["alternativeRoutes", "recommendation"],
-          additionalProperties: false,
-        },
-      },
-    },
-  }, apolloConfig);
-
-  logAgentTelemetry({
-    agent: "apollo",
-    model: response._model,
-    latencyMs: response._latencyMs,
-    promptTokens: response.usage?.prompt_tokens,
-    completionTokens: response.usage?.completion_tokens,
-    totalTokens: response.usage?.total_tokens,
-    success: true,
-    route: { origin, destination },
-  });
-
-  const content = String(response.choices[0]?.message?.content ?? "{}");
-  return JSON.parse(content) as ApolloResult;
+  score: RiskScore,
+  days: number,
+): Promise<AgentText> {
+  const primary = score.primaryFactor ?? "none";
+  const template = `Computed risk ${score.overall}/100 over about ${days} days. Primary factor: ${primary}.`;
+  if (score.drivers.length === 0) return { text: template, degraded: false };
+  try {
+    const { riskNarrative } = await callAgent<{ riskNarrative: string }>({
+      agent: "hermes",
+      config: hermesConfig,
+      system:
+        "You are Hermes, the risk analyst for RiskWise. The risk score is already computed in code. Explain it in 3-4 sentences for a logistics manager. Do not change, recompute, or contradict any number. Respond with valid JSON only.",
+      user: `Route: ${origin} to ${destination}, about ${days} days.
+Computed risk score: ${score.overall}/100. Breakdown: ${JSON.stringify(score.breakdown)}. Primary factor: ${primary}.
+${UNTRUSTED_NOTE}
+${eventsBlock(score.drivers)}`,
+      schemaName: "hermes_narrative",
+      schema: stringSchema("riskNarrative"),
+      validate: hermesOut,
+      route: { origin, destination },
+    });
+    return { text: riskNarrative, degraded: false };
+  } catch (err) {
+    hermesLog.warn({ err }, "Hermes narrative failed, using template");
+    return { text: template, degraded: true };
+  }
 }
 
 // ── Orchestrator ──────────────────────────────────────────────────────────────
 
+function titleKey(title: string): string {
+  return title.toLowerCase().slice(0, 60);
+}
+
+function toScorable(e: LiveRiskEvent | DbEvent): ScorableEvent {
+  return {
+    title: e.title,
+    category: e.category,
+    severity: e.severity,
+    affectedLocations: e.affectedLocations,
+    coordinates: "coordinates" in e ? e.coordinates : undefined,
+  };
+}
+
+/** Live events win over stored copies of the same event. */
+export function mergeEvents(live: LiveRiskEvent[], stored: DbEvent[]): ScorableEvent[] {
+  const seen = new Set<string>();
+  const merged: ScorableEvent[] = [];
+  for (const e of [...live, ...stored]) {
+    const key = titleKey(e.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(toScorable(e));
+  }
+  return merged;
+}
+
+/**
+ * `origin` and `destination` must be canonical names from shared/ports.ts.
+ * `storedEvents` must already be live-sourced and recent (see getRecentLiveRiskEvents).
+ */
 export async function orchestrate(
   origin: string,
   destination: string,
-  activeDisruptions: { title: string; category: string; severity: string; affectedLocations: string[]; description: string }[]
+  storedEvents: DbEvent[],
 ): Promise<OrchestrationResult> {
-  const orchestrationStart = Date.now();
+  const start = Date.now();
   orchestratorLog.info({ route: { origin, destination } }, `Starting orchestration: ${origin} -> ${destination}`);
 
-  // Step 1: Athena researches relevant disruptions (with live data)
-  let liveDataSources: { name: string; count: number; ok: boolean }[] = [];
-  try {
-    const { fetchAllRealTimeIntelligence } = await import("./realtime");
-    const liveData = await fetchAllRealTimeIntelligence();
-    liveDataSources = liveData.sources;
-  } catch {}
-  const athenaResult = await runAthena(origin, destination, activeDisruptions);
+  const route = buildRoute(origin, destination);
+  const liveData = await fetchAllRealTimeIntelligence();
+  const liveOk = liveData.sources.some((s) => s.kind === "live" && s.ok);
+  if (!liveOk && storedEvents.length === 0) throw new NoLiveDataError();
 
-  // Step 2: Hermes calculates risk score
-  const hermesResult = await runHermes(origin, destination, athenaResult);
+  const isBaseline = (e: LiveRiskEvent) => e.sourceProvider === BASELINE_PROVIDER;
+  const scoredEvents = mergeEvents(liveData.events.filter((e) => !isBaseline(e)), storedEvents);
+  const score = scoreRoute(route.waypoints, scoredEvents);
+  const baselineContext = scoreRoute(route.waypoints, liveData.events.filter(isBaseline).map(toScorable)).drivers;
+  const days = transitDays(route.distanceKm);
 
-  // Step 3: Apollo generates alternatives if risk > 50
-  let apolloResult: ApolloResult = { alternativeRoutes: [], recommendation: "Route risk is within acceptable parameters. No rerouting required." };
-  if (hermesResult.overallRiskScore > 50) {
-    apolloLog.info({ riskScore: hermesResult.overallRiskScore }, "Risk score > 50, invoking Apollo for alternatives");
-    apolloResult = await runApollo(origin, destination, hermesResult);
-  }
+  const athena = await runAthena(origin, destination, route, score);
+  const hermes = await runHermes(origin, destination, score, days);
 
-  const durationMs = Date.now() - orchestrationStart;
-  const sourcesOk = liveDataSources.filter((s) => s.ok).length;
-  const sourcesFailed = liveDataSources.filter((s) => !s.ok).length;
+  const reroute = score.overall > REROUTE_THRESHOLD;
+  const apollo = reroute
+    ? await runApollo({ origin, destination, route, score, days, events: scoredEvents, config: apolloConfig })
+    : { alternativeRoutes: [], recommendation: NO_REROUTE, degraded: false };
 
+  const durationMs = Date.now() - start;
   logRouteEvaluation({
     origin,
     destination,
-    overallRiskScore: Math.round(hermesResult.overallRiskScore),
-    primaryRiskFactor: hermesResult.primaryRiskFactor,
+    overallRiskScore: score.overall,
+    primaryRiskFactor: score.primaryFactor ?? "none",
     durationMs,
-    agentsInvoked: hermesResult.overallRiskScore > 50 ? ["athena", "hermes", "apollo"] : ["athena", "hermes"],
-    dataSourcesOk: sourcesOk,
-    dataSourcesFailed: sourcesFailed,
+    agentsInvoked: reroute ? ["athena", "hermes", "apollo"] : ["athena", "hermes"],
+    dataSourcesOk: liveData.sources.filter((s) => s.ok).length,
+    dataSourcesFailed: liveData.sources.filter((s) => !s.ok).length,
   });
 
-  orchestratorLog.info(
-    { route: { origin, destination }, riskScore: Math.round(hermesResult.overallRiskScore), durationMs },
-    `Orchestration complete in ${durationMs}ms`,
-  );
-
-  // Generate base route waypoints (simplified great-circle approximation)
-  const baseRouteWaypoints = generateBaseWaypoints(origin, destination);
-
   return {
-    overallRiskScore: Math.round(hermesResult.overallRiskScore),
-    primaryRiskFactor: hermesResult.primaryRiskFactor,
-    breakdown: {
-      weather: Math.round(hermesResult.breakdown.weather),
-      labor: Math.round(hermesResult.breakdown.labor),
-      geopolitical: Math.round(hermesResult.breakdown.geopolitical),
-      congestion: Math.round(hermesResult.breakdown.congestion),
-    },
-    baseTransitDays: hermesResult.baseTransitDays,
-    riskNarrative: hermesResult.riskNarrative,
-    intelligenceSummary: athenaResult.intelligenceSummary,
-    dataSources: liveDataSources,
-    alternativeRoutes: apolloResult.alternativeRoutes,
-    recommendation: apolloResult.recommendation,
-    baseRouteWaypoints,
+    overallRiskScore: score.overall,
+    primaryRiskFactor: describeFactor(score.primaryFactor),
+    breakdown: score.breakdown,
+    baseTransitDays: days,
+    riskNarrative: hermes.text,
+    intelligenceSummary: athena.text,
+    llmDegraded: athena.degraded || hermes.degraded || apollo.degraded,
+    dataSources: liveData.sources,
+    drivers: score.drivers,
+    baselineContext,
+    alternativeRoutes: apollo.alternativeRoutes,
+    recommendation: apollo.recommendation,
+    baseRouteWaypoints: route.waypoints,
   };
+}
+
+const FACTOR_LABEL: Record<Factor, string> = {
+  weather: "Weather",
+  labor: "Labor and strikes",
+  geopolitical: "Geopolitical",
+  congestion: "Port congestion",
+};
+
+function describeFactor(factor: Factor | null): string {
+  return factor ? FACTOR_LABEL[factor] : "None identified";
 }
 
 // ── Athena Background Scan ────────────────────────────────────────────────────
 
-/**
- * Athena Background Scan — now uses real-time data from live sources.
- * Fetches live events first; if available, picks the most critical one to persist.
- * Falls back to LLM-generated synthetic event if all live sources fail.
- */
-export async function runAthenaScan(): Promise<{
-  title: string;
-  description: string;
-  category: "Weather" | "Strike" | "Geopolitical" | "Port Congestion";
-  severity: "Low" | "Medium" | "High" | "Critical";
-  affectedLocations: string[];
-}> {
-  const scanStart = Date.now();
-
-  // Try live sources first
-  try {
-    const liveData = await fetchAllRealTimeIntelligence();
-    if (liveData.events.length > 0) {
-      // Pick the highest-severity event that isn't already a country-risk entry
-      const candidate = liveData.events.find((e) => e.sourceProvider !== "Osiris Country Risk Index") ?? liveData.events[0];
-      athenaLog.info(
-        { provider: candidate.sourceProvider, severity: candidate.severity, title: candidate.title },
-        `Scan picked live event from ${candidate.sourceProvider}`,
-      );
-      const result = {
-        title: candidate.title,
-        description: `[Live — ${candidate.sourceProvider}] ${candidate.description}`,
-        category: candidate.category,
-        severity: candidate.severity,
-        affectedLocations: candidate.affectedLocations,
-      };
-      logAthenaScan({
-        source: "live",
-        provider: candidate.sourceProvider,
-        title: candidate.title,
-        severity: candidate.severity,
-        category: candidate.category,
-        durationMs: Date.now() - scanStart,
-        success: true,
-      });
-      return result;
-    }
-  } catch (e) {
-    athenaLog.warn({ err: e }, "Live fetch failed during Athena scan, falling back to LLM generation");
-  }
-
-  // Fallback: LLM-generated synthetic event
-  athenaLog.warn("All live sources empty, generating synthetic event via LLM");
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `You are Athena, the logistics intelligence researcher for RiskWise. Generate a realistic new supply chain disruption event that could affect global shipping. Base it on plausible real-world scenarios involving ports, shipping lanes, weather, labor disputes, or geopolitical events. Always respond with valid JSON only.`,
-      },
-      {
-        role: "user",
-        content: `Generate one new realistic supply chain disruption event for the current date. Make it specific, plausible, and impactful. Use one of these categories: Weather, Strike, Geopolitical, Port Congestion. Use one of these severities: Low, Medium, High, Critical.
-
-Respond with JSON in this exact format:
-{
-  "title": "string - concise event title",
-  "description": "string - 2-3 sentence detailed description",
-  "category": "Weather|Strike|Geopolitical|Port Congestion",
-  "severity": "Low|Medium|High|Critical",
-  "affectedLocations": ["string - port or region names"]
-}`,
-      },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "athena_scan_result",
-        strict: true,
-        schema: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-            description: { type: "string" },
-            category: { type: "string", enum: ["Weather", "Strike", "Geopolitical", "Port Congestion"] },
-            severity: { type: "string", enum: ["Low", "Medium", "High", "Critical"] },
-            affectedLocations: { type: "array", items: { type: "string" } },
-          },
-          required: ["title", "description", "category", "severity", "affectedLocations"],
-          additionalProperties: false,
-        },
-      },
-    },
-  }, athenaConfig);
-
-  logAgentTelemetry({
-    agent: "athena-scan",
-    model: response._model,
-    latencyMs: response._latencyMs,
-    promptTokens: response.usage?.prompt_tokens,
-    completionTokens: response.usage?.completion_tokens,
-    totalTokens: response.usage?.total_tokens,
-    success: true,
-  });
-
-  const parsed = JSON.parse(String(response.choices[0]?.message?.content ?? "{}"));
-
-  logAthenaScan({
-    source: "llm-fallback",
-    title: parsed.title ?? "unknown",
-    severity: parsed.severity ?? "unknown",
-    category: parsed.category ?? "unknown",
-    durationMs: Date.now() - scanStart,
-    success: true,
-  });
-
-  return parsed;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-const PORT_COORDS: Record<string, [number, number]> = {
-  "port of shanghai": [121.8, 30.6],
-  "port of rotterdam": [4.5, 51.9],
-  "port of singapore": [103.8, 1.3],
-  "port of los angeles": [-118.2, 33.7],
-  "port of long beach": [-118.2, 33.7],
-  "port of shenzhen": [114.0, 22.5],
-  "port of hong kong": [114.2, 22.3],
-  "port of hamburg": [9.9, 53.5],
-  "port of new york": [-74.0, 40.7],
-  "port of dubai": [55.3, 25.3],
-  "port of busan": [129.0, 35.1],
-  "port of kaohsiung": [120.3, 22.6],
-  "port of tokyo": [139.7, 35.6],
-  "port of mumbai": [72.8, 18.9],
-  "port of sydney": [151.2, -33.9],
-};
-
-function generateBaseWaypoints(origin: string, destination: string): [number, number][] {
-  const originCoords = PORT_COORDS[origin.toLowerCase()] ?? [0, 0];
-  const destCoords = PORT_COORDS[destination.toLowerCase()] ?? [0, 0];
-
-  // Generate 8 interpolated points
-  const points: [number, number][] = [];
-  for (let i = 0; i <= 7; i++) {
-    const t = i / 7;
-    const lng = originCoords[0] + (destCoords[0] - originCoords[0]) * t;
-    const lat = originCoords[1] + (destCoords[1] - originCoords[1]) * t;
-    points.push([lng, lat]);
-  }
-  return points;
+/** Highest-severity live event, or null when no live source produced one. Baseline entries are skipped. */
+export async function selectScanEvent(): Promise<LiveRiskEvent | null> {
+  const liveData = await fetchAllRealTimeIntelligence();
+  return liveData.events.find((e) => e.sourceProvider !== BASELINE_PROVIDER) ?? null;
 }

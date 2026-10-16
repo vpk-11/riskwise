@@ -30,6 +30,7 @@ export type Message = {
   content: MessageContent | MessageContent[];
   name?: string;
   tool_call_id?: string;
+  tool_calls?: ToolCall[];
 };
 
 export type Tool = {
@@ -137,7 +138,7 @@ const normalizeContentPart = (
 };
 
 const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
+  const { role, name, tool_call_id, tool_calls } = message;
 
   if (role === "tool" || role === "function") {
     const content = ensureArray(message.content)
@@ -160,6 +161,7 @@ const normalizeMessage = (message: Message) => {
       role,
       name,
       content: contentParts[0].text,
+      ...(tool_calls ? { tool_calls } : {}),
     };
   }
 
@@ -208,6 +210,9 @@ const normalizeToolChoice = (
 
   return toolChoice;
 };
+
+/** Local reasoning models take about a minute for three calls; this bounds a hung endpoint, not a slow one. */
+const LLM_TIMEOUT_MS = 180_000;
 
 export type LLMConfig = {
   baseUrl?: string;
@@ -324,6 +329,7 @@ export async function invokeLLM(params: InvokeParams, config?: LLMConfig): Promi
 
   const start = Date.now();
   const response = await fetch(resolveApiUrl(config), {
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -343,4 +349,40 @@ export async function invokeLLM(params: InvokeParams, config?: LLMConfig): Promi
 
   const result = (await response.json()) as InvokeResult;
   return { ...result, _latencyMs: latencyMs, _model: model };
+}
+
+export type LlmStatus = {
+  status: "ready" | "model_missing" | "unreachable" | "unknown";
+  model: string;
+  baseUrl: string;
+  /** Model ids the endpoint lists, when it lists them. */
+  installed: string[];
+  detail?: string;
+};
+
+/**
+ * Is the configured endpoint up and does it have the configured model? Uses the OpenAI-compatible `/models` list.
+ * "unknown" means the endpoint does not offer that list, so nothing can be said either way.
+ */
+export async function checkLlm(config?: LLMConfig): Promise<LlmStatus> {
+  const model = resolveModel(config);
+  const baseUrl = (config?.baseUrl ?? ENV.RISKWISE_LLM_BASE_URL).replace(/\/$/, "");
+  const base = { model, baseUrl, installed: [] as string[] };
+  try {
+    const response = await fetch(`${baseUrl}/models`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { authorization: `Bearer ${config?.apiKey ?? ENV.RISKWISE_LLM_API_KEY}` },
+    });
+    if (!response.ok) return { ...base, status: "unknown", detail: `The endpoint answered ${response.status} to the model list` };
+    const body = (await response.json()) as { data?: { id?: string }[] };
+    const installed = (body.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+    if (installed.length === 0) return { ...base, status: "unknown", detail: "The endpoint listed no models" };
+    // Ollama tags models ("mistral:latest"); a bare name means the latest tag
+    const has = installed.some((id) => id === model || id.startsWith(`${model}:`));
+    return has
+      ? { ...base, installed, status: "ready" }
+      : { ...base, installed, status: "model_missing", detail: `Model "${model}" is not available. Installed: ${installed.join(", ")}. Set RISKWISE_LLM_MODEL.` };
+  } catch (err) {
+    return { ...base, status: "unreachable", detail: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -1,5 +1,6 @@
 import {
   boolean,
+  doublePrecision,
   integer,
   json,
   pgEnum,
@@ -10,35 +11,19 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-export const roleEnum = pgEnum("role", ["user", "admin"]);
 export const categoryEnum = pgEnum("risk_category", [
   "Weather",
   "Strike",
   "Geopolitical",
   "Port Congestion",
 ]);
+export const sourceTypeEnum = pgEnum("risk_source_type", ["live", "baseline", "llm-synthetic"]);
 export const severityEnum = pgEnum("risk_severity", [
   "Low",
   "Medium",
   "High",
   "Critical",
 ]);
-
-// ── Users ─────────────────────────────────────────────────────────────────────
-
-export const users = pgTable("users", {
-  id: serial("id").primaryKey(),
-  email: varchar("email", { length: 320 }).notNull().unique(),
-  name: text("name"),
-  passwordHash: varchar("password_hash", { length: 255 }),
-  role: roleEnum("role").default("user").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  lastSignedIn: timestamp("last_signed_in").defaultNow().notNull(),
-});
-
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
 
 // ── Risk Events ───────────────────────────────────────────────────────────────
 
@@ -50,6 +35,9 @@ export const riskEvents = pgTable("risk_events", {
   severity: severityEnum("severity").notNull(),
   affectedLocations: json("affected_locations").notNull().$type<string[]>(),
   sourceUrl: text("source_url"),
+  longitude: doublePrecision("longitude"),
+  latitude: doublePrecision("latitude"),
+  sourceType: sourceTypeEnum("source_type").notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

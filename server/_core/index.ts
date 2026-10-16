@@ -11,6 +11,7 @@ import { serveStatic, setupVite } from "./vite";
 import { athenaHourlyScan } from "../scheduledHandlers";
 import { logger } from "./logger";
 import { ENV } from "./env";
+import { checkLlm } from "./llm";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -29,10 +30,12 @@ async function findAvailablePort(startPort = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
+  // The evaluation rate limit keys on req.ip. Behind a reverse proxy that is the proxy unless the hop count is set.
+  // Left at 0 by default: trusting X-Forwarded-For with no proxy lets any client fake its IP and dodge the limit.
+  app.set("trust proxy", ENV.RISKWISE_TRUST_PROXY);
   const server = createServer(app);
 
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ limit: "10mb", extended: true }));
+  app.use(express.json({ limit: "100kb" }));
 
   // Request ID middleware
   app.use((req, _res, next) => {
@@ -69,6 +72,15 @@ async function startServer() {
     res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
   });
 
+  // Dev-only manual trigger. Must be registered before the Vite / static catch-all or it is shadowed.
+  if (!ENV.isProduction) {
+    app.post("/api/dev/trigger-athena", (_req, res) => {
+      athenaHourlyScan()
+        .then(() => res.json({ ok: true }))
+        .catch((err) => res.status(500).json({ error: String(err) }));
+    });
+  }
+
   if (ENV.NODE_ENV === "development") {
     await setupVite(app, server);
   } else {
@@ -91,19 +103,15 @@ async function startServer() {
   });
   logger.info("Athena hourly scan scheduled (every hour at :00)");
 
+  checkLlm().then((llm) => {
+    if (llm.status === "ready") logger.info({ model: llm.model, baseUrl: llm.baseUrl }, "LLM ready");
+    else logger.warn({ model: llm.model, baseUrl: llm.baseUrl, status: llm.status, detail: llm.detail }, "LLM not ready: evaluations will return templated text until this is fixed");
+  });
+
   // Seed on startup so the DB isn't empty on first boot
   setTimeout(() => {
     athenaHourlyScan().catch((err) => logger.warn({ err }, "Athena startup scan failed"));
   }, 3000);
-
-  // Dev-only: manual trigger endpoint
-  if (!ENV.isProduction) {
-    app.post("/api/dev/trigger-athena", (_req, res) => {
-      athenaHourlyScan()
-        .then(() => res.json({ ok: true }))
-        .catch((err) => res.status(500).json({ error: String(err) }));
-    });
-  }
 }
 
 startServer().catch((err) => {

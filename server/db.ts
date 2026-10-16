@@ -1,5 +1,6 @@
-import { eq, and, asc, desc } from "drizzle-orm";
+import { eq, and, asc, desc, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
+import type { PgDatabase } from "drizzle-orm/pg-core";
 import postgres from "postgres";
 import {
   type InsertRiskEvent,
@@ -8,9 +9,11 @@ import {
   riskEvents,
   routeEvaluations,
   shippingRoutes,
-  users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+
+/** Any Drizzle Postgres database. Query helpers take one so tests can pass an in-process Postgres. */
+export type Db = PgDatabase<any, any, any>;
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -22,20 +25,6 @@ function getDb() {
   return _db;
 }
 
-// ── Users ─────────────────────────────────────────────────────────────────────
-
-export async function getUserById(id: number) {
-  const db = getDb();
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  return result[0] ?? null;
-}
-
-export async function getUserByEmail(email: string) {
-  const db = getDb();
-  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  return result[0] ?? null;
-}
-
 // ── Risk Events ───────────────────────────────────────────────────────────────
 
 export async function getActiveRiskEvents() {
@@ -45,6 +34,33 @@ export async function getActiveRiskEvents() {
     .from(riskEvents)
     .where(eq(riskEvents.isActive, true))
     .orderBy(desc(riskEvents.createdAt));
+}
+
+/** Live-sourced events from the last EVENT_MAX_AGE_DAYS. Synthetic and baseline rows never feed scoring. */
+export const EVENT_MAX_AGE_DAYS = 7;
+
+export async function getRecentLiveRiskEvents(db: Db = getDb()) {
+  const since = new Date(Date.now() - EVENT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+  return db
+    .select()
+    .from(riskEvents)
+    .where(
+      and(
+        eq(riskEvents.isActive, true),
+        eq(riskEvents.sourceType, "live"),
+        gte(riskEvents.createdAt, since),
+      ),
+    )
+    .orderBy(desc(riskEvents.createdAt));
+}
+
+export async function activeRiskEventExists(title: string, db: Db = getDb()) {
+  const rows = await db
+    .select({ id: riskEvents.id })
+    .from(riskEvents)
+    .where(and(eq(riskEvents.isActive, true), eq(riskEvents.sourceType, "live"), eq(riskEvents.title, title)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function insertRiskEvent(event: InsertRiskEvent) {
@@ -90,9 +106,9 @@ export async function getRouteHistory(limit = 20) {
     .limit(limit);
 }
 
-export async function getRouteTrend(originPort: string, destinationPort: string, limit = 10) {
-  const db = getDb();
-  return db
+/** The latest `limit` evaluations of a route, oldest first (for the sparkline). */
+export async function getRouteTrend(originPort: string, destinationPort: string, limit = 10, db: Db = getDb()) {
+  const latest = await db
     .select({
       id: routeEvaluations.id,
       overallRiskScore: routeEvaluations.overallRiskScore,
@@ -105,8 +121,9 @@ export async function getRouteTrend(originPort: string, destinationPort: string,
         eq(routeEvaluations.destinationPort, destinationPort)
       )
     )
-    .orderBy(asc(routeEvaluations.evaluatedAt))
+    .orderBy(desc(routeEvaluations.evaluatedAt))
     .limit(limit);
+  return latest.reverse();
 }
 
 export async function getEvaluationById(id: number) {

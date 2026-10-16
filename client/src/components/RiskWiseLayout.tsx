@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
 import {
   Map,
   Route,
   AlertTriangle,
   History,
-  Shield,
   Menu,
   X,
   Activity,
@@ -27,6 +27,8 @@ interface RiskWiseLayoutProps {
 export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const llm = trpc.system.llm.useQuery(undefined, { refetchInterval: 60_000, retry: false });
+  const llmNotReady = llm.data && llm.data.status !== "ready" && llm.data.status !== "unknown";
 
   const activePath = location === "/" ? "/map" : location;
 
@@ -53,15 +55,12 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-5 py-5 border-b border-sidebar-border">
-          <div className="relative">
-            <Shield className="w-8 h-8 text-primary" />
-            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-primary rounded-full" />
-          </div>
+          <img src="/logo-mark.svg" alt="" className="w-9 h-9 shrink-0" />
           <div>
             <h1 className="font-display text-xl font-bold text-primary text-glow-cyan tracking-wider">
               RISKWISE
             </h1>
-            <p className="text-[10px] text-muted-foreground font-mono tracking-widest uppercase">
+            <p className="text-[11px] text-muted-foreground font-mono tracking-widest uppercase">
               Supply Chain Intel
             </p>
           </div>
@@ -79,6 +78,21 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
           <span className="text-[11px] font-mono text-[oklch(0.82_0.22_145)]">SYSTEM ONLINE</span>
           <Zap className="w-3 h-3 text-[oklch(0.82_0.22_145)] ml-auto" />
         </div>
+        {llmNotReady && (
+          <div
+            className="mx-4 mb-3 px-3 py-2 rounded-sm border border-[oklch(0.80_0.20_75/0.4)] bg-[oklch(0.80_0.20_75/0.06)]"
+            title={llm.data?.detail}
+          >
+            <div className="text-[11px] font-mono font-bold text-[oklch(0.80_0.20_75)]">
+              {llm.data?.status === "model_missing" ? "LLM MODEL MISSING" : "LLM OFFLINE"}
+            </div>
+            <div className="text-[11px] font-mono text-muted-foreground leading-snug mt-0.5">
+              {llm.data?.status === "model_missing"
+                ? `"${llm.data.model}" is not installed. Set RISKWISE_LLM_MODEL.`
+                : "Evaluations will return templated text."}
+            </div>
+          </div>
+        )}
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto">
@@ -126,8 +140,8 @@ export default function RiskWiseLayout({ children }: RiskWiseLayoutProps) {
 
         {/* Footer */}
         <div className="px-4 py-4 border-t border-sidebar-border">
-          <div className="text-[10px] font-mono text-muted-foreground/60 text-center">
-            <div>RISKWISE v2.4.1</div>
+          <div className="text-[11px] font-mono text-muted-foreground/60 text-center">
+            <div>RISKWISE v{__APP_VERSION__}</div>
             <div className="mt-0.5">AGENTS: ATHENA · HERMES · APOLLO</div>
           </div>
         </div>

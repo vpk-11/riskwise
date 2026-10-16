@@ -93,7 +93,7 @@ export function logRouteEvaluation(data: {
 }
 
 export function logAthenaScan(data: {
-  source: "live" | "llm-fallback";
+  source: "live" | "none";
   provider?: string;
   title: string;
   severity: string;

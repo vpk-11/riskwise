@@ -3,82 +3,26 @@ import type { Feature, FeatureCollection, Point, LineString } from "geojson";
 import maplibregl from "maplibre-gl";
 import { MapView as LibreMap } from "@/components/Map";
 import { trpc } from "@/lib/trpc";
-import { getRiskColor, getSeverityColor, getCategoryIcon } from "@/lib/riskUtils";
+import { getRiskColor, getSeverityColor, toMapColor } from "@/lib/riskUtils";
+import { popupHTML } from "@/lib/mapPopup";
 import { AlertTriangle, Layers, Eye, EyeOff, RefreshCw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-// ── Coordinate lookups ───────────────────────────────────────────────────────
-
-const DISRUPTION_COORDS: Record<string, [number, number]> = {
-  "Suez Canal": [32.3, 30.5],
-  "Red Sea": [38.0, 20.0],
-  "Port of Shanghai": [121.8, 30.6],
-  "South China Sea": [115.0, 15.0],
-  "Port of Rotterdam": [4.5, 51.9],
-  "Panama Canal": [-79.5, 9.0],
-  "Taiwan Strait": [119.5, 24.0],
-  "Port of Los Angeles": [-118.2, 33.7],
-  "Port of Long Beach": [-118.2, 33.7],
-  "Singapore Strait": [104.0, 1.2],
-  "Port of Hamburg": [9.9, 53.5],
-  "Strait of Hormuz": [56.5, 26.5],
-  "Port of Busan": [129.0, 35.1],
-  "North Atlantic Ocean": [-35.0, 45.0],
-  "Malacca Strait": [101.0, 3.0],
-  "Port of Singapore": [103.8, 1.3],
-  "Persian Gulf": [52.0, 26.0],
-  "Port of Dubai": [55.3, 25.3],
-  "Port of Aden": [45.0, 12.8],
-  "Bab-el-Mandeb Strait": [43.5, 12.5],
-  "Yangshan Deep Water Port": [122.1, 30.6],
-  "East China Sea": [125.0, 28.0],
-  "Port of Hong Kong": [114.2, 22.3],
-  "Port of Manila": [120.9, 14.6],
-  "Port of Kaohsiung": [120.3, 22.6],
-  "Europoort": [4.1, 51.9],
-  "Gulf of Panama": [-79.0, 8.5],
-  "Caribbean Sea": [-75.0, 15.0],
-  "North Sea": [3.0, 56.0],
-  "Port of Fujairah": [56.3, 25.1],
-  "Korea Strait": [129.0, 34.5],
-  "Yellow Sea": [123.0, 35.0],
-};
-
-export const PORT_COORDS: Record<string, [number, number]> = {
-  "port of shanghai": [121.8, 30.6],
-  "port of rotterdam": [4.5, 51.9],
-  "port of singapore": [103.8, 1.3],
-  "port of los angeles": [-118.2, 33.7],
-  "port of long beach": [-118.2, 33.7],
-  "port of shenzhen": [114.0, 22.5],
-  "port of hong kong": [114.2, 22.3],
-  "port of hamburg": [9.9, 53.5],
-  "port of new york": [-74.0, 40.7],
-  "port of dubai": [55.3, 25.3],
-  "port of busan": [129.0, 35.1],
-  "shenzhen": [114.0, 22.5],
-  "shanghai": [121.8, 30.6],
-  "rotterdam": [4.5, 51.9],
-  "singapore": [103.8, 1.3],
-  "hamburg": [9.9, 53.5],
-  "dubai": [55.3, 25.3],
-  "busan": [129.0, 35.1],
-  "new york": [-74.0, 40.7],
-  "long beach": [-118.2, 33.7],
-  "los angeles": [-118.2, 33.7],
-};
+import { buildRoute, LOCATION_POINTS, unwrapAntimeridian } from "@shared/geo";
+import { resolvePort } from "@shared/ports";
 
 // ── Source/layer IDs ─────────────────────────────────────────────────────────
 
 const SRC = {
   baseRoutes: "base-routes",
   evalRoutes: "eval-routes",
+  altRoutes: "alt-routes",
   disruptions: "disruptions",
 } as const;
 
 const LAYER = {
   baseLines: "base-routes-line",
   evalLines: "eval-routes-line",
+  altLines: "alt-routes-line",
   disruptionZones: "disruption-zones",
   disruptionPoints: "disruption-points",
 } as const;
@@ -92,6 +36,8 @@ type RiskEvent = {
   category: string;
   severity: string;
   affectedLocations: unknown;
+  longitude: number | null;
+  latitude: number | null;
 };
 
 type RouteRecord = {
@@ -103,6 +49,7 @@ type EvalRecord = {
   originPort: string;
   destinationPort: string;
   overallRiskScore: number;
+  alternativeRoutes: unknown;
 };
 
 function buildBaseRouteGeoJSON(routes: RouteRecord[]): FeatureCollection<LineString> {
@@ -125,26 +72,51 @@ function buildEvalRouteGeoJSON(history: EvalRecord[]): FeatureCollection<LineStr
   return {
     type: "FeatureCollection",
     features: history.flatMap((ev) => {
-      const origin = PORT_COORDS[ev.originPort.toLowerCase()];
-      const dest = PORT_COORDS[ev.destinationPort.toLowerCase()];
+      const origin = resolvePort(ev.originPort);
+      const dest = resolvePort(ev.destinationPort);
       if (!origin || !dest) return [];
       const f: Feature<LineString> = {
         type: "Feature",
-        geometry: { type: "LineString", coordinates: [origin, dest] },
-        properties: { color: getRiskColor(ev.overallRiskScore) },
+        geometry: { type: "LineString", coordinates: unwrapAntimeridian(buildRoute(origin, dest).waypoints) },
+        properties: { color: toMapColor(getRiskColor(ev.overallRiskScore)) },
       };
       return [f];
     }),
   };
 }
 
+/**
+ * Alternative lanes from past evaluations. Only rows with an optionId are drawn: those were computed on the
+ * sea-lane graph. Older rows hold model-invented waypoints and are skipped.
+ */
+function buildAltRouteGeoJSON(history: EvalRecord[]): FeatureCollection<LineString> {
+  return {
+    type: "FeatureCollection",
+    features: history.flatMap((ev) =>
+      ((ev.alternativeRoutes as { optionId?: string; waypoints?: [number, number][]; riskScore?: number }[] | null) ?? []).flatMap((alt) => {
+        if (!alt.optionId || !Array.isArray(alt.waypoints) || alt.waypoints.length < 2) return [];
+        const f: Feature<LineString> = {
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: unwrapAntimeridian(alt.waypoints) },
+          properties: { color: toMapColor(getRiskColor(alt.riskScore ?? 0)) },
+        };
+        return [f];
+      }),
+    ),
+  };
+}
+
 function buildDisruptionGeoJSON(events: RiskEvent[]): FeatureCollection<Point> {
   const features: Feature<Point>[] = [];
   events.forEach((ev) => {
-    const locations = ev.affectedLocations as string[];
-    locations.forEach((loc) => {
-      const coord = DISRUPTION_COORDS[loc];
-      if (!coord) return;
+    // Exact coordinates from the source win; otherwise plot each labelled region that resolves.
+    const exact: [number, number][] =
+      ev.longitude !== null && ev.latitude !== null ? [[ev.longitude, ev.latitude]] : [];
+    const labelled = (ev.affectedLocations as string[]).flatMap((loc) => {
+      const coord = LOCATION_POINTS[loc.trim().toLowerCase()];
+      return coord ? [coord] : [];
+    });
+    (exact.length > 0 ? exact : labelled).forEach((coord) => {
       features.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: coord },
@@ -154,49 +126,13 @@ function buildDisruptionGeoJSON(events: RiskEvent[]): FeatureCollection<Point> {
           description: ev.description,
           category: ev.category,
           severity: ev.severity,
-          color: getSeverityColor(ev.severity),
+          color: toMapColor(getSeverityColor(ev.severity)),
           radius: ev.severity === "Critical" ? 14 : ev.severity === "High" ? 10 : 7,
         },
       });
     });
   });
   return { type: "FeatureCollection", features };
-}
-
-function popupHTML(props: Record<string, string>) {
-  const color = props.color ?? "#888";
-  return `
-    <div style="
-      background: #0d1a2a;
-      border: 1px solid ${color}55;
-      border-radius: 6px;
-      padding: 14px 16px;
-      max-width: 280px;
-      min-width: 220px;
-      font-family: 'Share Tech Mono', monospace;
-      color: #c8dce8;
-    ">
-      <div style="color:${color};font-size:10px;letter-spacing:2px;margin-bottom:6px;text-transform:uppercase;">
-        ${getCategoryIcon(props.category)} ${props.category}
-      </div>
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px;color:#e8f4f8;line-height:1.3;">
-        ${props.title}
-      </div>
-      <div style="font-size:11px;color:#7a9ab0;line-height:1.6;margin-bottom:10px;">
-        ${(props.description ?? "").slice(0, 130)}${(props.description ?? "").length > 130 ? "…" : ""}
-      </div>
-      <span style="
-        display:inline-block;
-        background:${color}22;
-        border:1px solid ${color}55;
-        border-radius:3px;
-        padding:2px 8px;
-        font-size:10px;
-        color:${color};
-        letter-spacing:1.5px;
-        text-transform:uppercase;
-      ">● SEVERITY: ${props.severity}</span>
-    </div>`;
 }
 
 // ── Source/layer setup on first map load ─────────────────────────────────────
@@ -206,6 +142,7 @@ function initLayers(map: maplibregl.Map) {
 
   map.addSource(SRC.baseRoutes, { type: "geojson", data: emptyFC });
   map.addSource(SRC.evalRoutes, { type: "geojson", data: emptyFC });
+  map.addSource(SRC.altRoutes, { type: "geojson", data: emptyFC });
   map.addSource(SRC.disruptions, { type: "geojson", data: emptyFC });
 
   map.addLayer({
@@ -223,6 +160,18 @@ function initLayers(map: maplibregl.Map) {
       "line-color": ["get", "color"],
       "line-opacity": 0.85,
       "line-width": 3,
+    },
+  });
+
+  map.addLayer({
+    id: LAYER.altLines,
+    type: "line",
+    source: SRC.altRoutes,
+    paint: {
+      "line-color": ["get", "color"],
+      "line-opacity": 0.7,
+      "line-width": 2,
+      "line-dasharray": [2, 2],
     },
   });
 
@@ -296,6 +245,7 @@ export default function MapView() {
     const empty: FeatureCollection = { type: "FeatureCollection", features: [] };
     setSourceData(map, SRC.baseRoutes, showRoutes && routes ? buildBaseRouteGeoJSON(routes) : empty);
     setSourceData(map, SRC.evalRoutes, showRoutes && history ? buildEvalRouteGeoJSON(history) : empty);
+    setSourceData(map, SRC.altRoutes, showRoutes && history ? buildAltRouteGeoJSON(history) : empty);
     setSourceData(map, SRC.disruptions, showDisruptions && disruptions ? buildDisruptionGeoJSON(disruptions) : empty);
   }, [routes, history, disruptions, showRoutes, showDisruptions]);
 
@@ -374,7 +324,7 @@ export default function MapView() {
       {/* Controls */}
       <div className="absolute top-4 right-4 flex flex-col gap-2 z-10">
         <div className="cyber-card p-3 space-y-2 min-w-[180px]">
-          <div className="text-[10px] font-mono text-muted-foreground tracking-widest uppercase mb-3 flex items-center gap-1.5">
+          <div className="text-[11px] font-mono text-muted-foreground tracking-widest uppercase mb-3 flex items-center gap-1.5">
             <Layers className="w-3 h-3" />
             Map Layers
           </div>
@@ -412,7 +362,7 @@ export default function MapView() {
         </div>
 
         <div className="cyber-card p-3 min-w-[180px]">
-          <div className="text-[10px] font-mono text-muted-foreground tracking-widest uppercase mb-3">
+          <div className="text-[11px] font-mono text-muted-foreground tracking-widest uppercase mb-3">
             Risk Legend
           </div>
           <div className="space-y-1.5">

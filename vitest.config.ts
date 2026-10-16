@@ -14,10 +14,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
+    include: ["server/**/*.test.ts", "client/src/**/*.test.ts"],
     env: {
       DATABASE_URL: "postgresql://test:test@localhost:5432/test",
-      JWT_SECRET: "test-secret-minimum-32-characters-long",
       NODE_ENV: "test",
     },
   },
